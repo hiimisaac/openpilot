@@ -38,10 +38,6 @@ class GuiApplication:
     self._textures: list[rl.Texture] = []
     self._target_fps: int = DEFAULT_FPS
     self._last_fps_log_time: float = time.monotonic()
-    self._window_close_requested = False
-
-  def request_close(self):
-    self._window_close_requested = True
 
   def init_window(self, title: str, fps: int=DEFAULT_FPS):
     atexit.register(self.close)  # Automatically call close() on exit
@@ -54,11 +50,9 @@ class GuiApplication:
     self._set_styles()
     self._load_fonts()
 
-  def load_texture_from_image(self, file_name: str, width: int, height: int, alpha_premultiply = False):
+  def load_texture_from_image(self, file_name: str, width: int, height: int):
     """Load and resize a texture, storing it for later automatic unloading."""
     image = rl.load_image(file_name)
-    if alpha_premultiply:
-      rl.image_alpha_premultiply(image)
     rl.image_resize(image, width, height)
     texture = rl.load_texture_from_image(image)
     # Set texture filtering to smooth the result
@@ -84,7 +78,7 @@ class GuiApplication:
     rl.close_window()
 
   def render(self):
-    while not (self._window_close_requested or rl.window_should_close()):
+    while not rl.window_should_close():
       rl.begin_drawing()
       rl.clear_background(rl.BLACK)
 
