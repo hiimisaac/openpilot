@@ -15,6 +15,9 @@ export VECLIB_MAXIMUM_THREADS=1
 # headroom for this until ui is moved to the CPU.
 export QCOM_PRIORITY=12
 
+export FINGERPRINT="FORD_F_150_LIGHTNING_MK1"
+export SKIP_FW_QUERY="1"
+
 if [ -z "$AGNOS_VERSION" ]; then
   export AGNOS_VERSION="17.2"
 fi
