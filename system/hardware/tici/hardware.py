@@ -69,9 +69,12 @@ class Tici(HardwareBase):
     return Amplifier()
 
   def get_modem_state(self) -> dict:
-    """Read modem.py state file. Raises if modem.py hasn't published state yet."""
-    with open(MODEM_STATE_PATH) as f:
-      return json.load(f)
+    """Read modem.py state file. Return empty state when modem.py is disabled."""
+    try:
+      with open(MODEM_STATE_PATH) as f:
+        return json.load(f)
+    except FileNotFoundError:
+      return {}
 
   def get_os_version(self):
     with open("/VERSION") as f:
@@ -157,10 +160,7 @@ class Tici(HardwareBase):
   def get_imei(self, slot):
     if slot != 0:
       return ""
-    try:
-      return self.get_modem_state().get('imei', '')
-    except FileNotFoundError:
-      return ""
+    return self.get_modem_state().get('imei', '')
 
   def get_network_info(self):
     if self.get_device_type() == "mici":
