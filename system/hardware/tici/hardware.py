@@ -157,7 +157,10 @@ class Tici(HardwareBase):
   def get_imei(self, slot):
     if slot != 0:
       return ""
-    return self.get_modem_state().get('imei', '')
+    try:
+      return self.get_modem_state().get('imei', '')
+    except FileNotFoundError:
+      return ""
 
   def get_network_info(self):
     if self.get_device_type() == "mici":
