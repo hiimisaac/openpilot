@@ -8,6 +8,7 @@ from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.selfdrive.controls.lib.green_light_launch import GreenLightLaunch
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
@@ -52,6 +53,7 @@ class LongitudinalPlanner:
     self.fcw = False
     self.dt = dt
     self.allow_throttle = True
+    self.green_light_launch = GreenLightLaunch()
 
     self.a_desired = init_a
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
@@ -132,6 +134,25 @@ class LongitudinalPlanner:
                                                                         action_t=action_t, vEgoStopping=self.CP.vEgoStopping)
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
+
+    model_v = np.zeros(len(T_IDXS_MPC))
+    model_a = np.zeros(len(T_IDXS_MPC))
+    if (len(sm['modelV2'].velocity.x) == ModelConstants.IDX_N and
+        len(sm['modelV2'].acceleration.x) == ModelConstants.IDX_N):
+      model_v = np.interp(T_IDXS_MPC, ModelConstants.T_IDXS, sm['modelV2'].velocity.x)
+      model_a = np.interp(T_IDXS_MPC, ModelConstants.T_IDXS, sm['modelV2'].acceleration.x)
+    output_a_target_e2e = self.green_light_launch.update(
+      output_a_target_e2e,
+      standstill=sm['carState'].standstill,
+      v_ego=v_ego,
+      enabled=sm['selfdriveState'].experimentalMode,
+      should_stop=output_should_stop_e2e,
+      model_speeds=model_v,
+      model_accels=model_a,
+      t_idxs=T_IDXS_MPC,
+      action_t=action_t,
+      v_ego_stopping=self.CP.vEgoStopping,
+    )
 
     if sm['selfdriveState'].experimentalMode:
       output_a_target = min(output_a_target_e2e, output_a_target_mpc)
