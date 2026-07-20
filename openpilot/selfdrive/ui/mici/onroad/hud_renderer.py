@@ -26,6 +26,7 @@ class FontSizes:
   speed_unit: int = 66
   max_speed: int = 36
   set_speed: int = 112
+  mads: int = 24
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,17 @@ class HudRenderer(Widget):
       self._draw_model_source(rect)
 
     self._draw_steering_wheel(rect)
+    self._draw_mads_status(rect)
+
+  def _draw_mads_status(self, rect: rl.Rectangle) -> None:
+    ss = ui_state.sm["selfdriveState"]
+    if not ss.madsAvailable:
+      return
+
+    text = tr("MADS ON") if ss.madsEnabled else tr("MADS OFF")
+    text_size = measure_text_cached(self._font_semi_bold, text, FONT_SIZES.mads)
+    position = rl.Vector2(rect.x + rect.width - text_size.x - 12, rect.y + 12)
+    rl.draw_text_ex(self._font_semi_bold, text, position, FONT_SIZES.mads, 0, COLORS.WHITE)
 
   def _draw_model_source(self, rect: rl.Rectangle) -> None:
     if ui_state.sm.recv_frame['selfdriveState'] < ui_state.started_frame:
