@@ -523,10 +523,8 @@ class SelfdriveD:
 
         if REPLAY:
           if self.mads_available:
-            if any(ps.controlsAllowed and ps.controlsAllowedLateral for ps in self.sm['pandaStates']):
+            if any(ps.controlsAllowed or ps.controlsAllowedRESERVED1 for ps in self.sm['pandaStates']):
               self.state_machine.state = State.enabled
-            elif any(ps.controlsAllowedLateral for ps in self.sm['pandaStates']):
-              self.state_machine.state = State.lateralEnabled
           elif any(ps.controlsAllowed for ps in self.sm['pandaStates']):
             self.state_machine.state = State.enabled
 
@@ -555,8 +553,8 @@ class SelfdriveD:
         if not self.mads_available:
           return ps.controlsAllowed
         if self.mads_lateral_only:
-          return ps.controlsAllowedLateral
-        return ps.controlsAllowed and ps.controlsAllowedLateral
+          return ps.controlsAllowedRESERVED1
+        return ps.controlsAllowed and ps.controlsAllowedRESERVED1
 
       controls_mismatch = any(not panda_controls_allowed(ps) for ps in self.sm['pandaStates'] if ps.safetyModel not in IGNORED_SAFETY_MODES)
       self.mismatch_counter = self.mismatch_counter + 1 if controls_mismatch else 0
@@ -587,9 +585,6 @@ class SelfdriveD:
     ss.engageable = not self.events.contains(ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
     ss.personality = self.personality
-    ss.madsEnabled = self.mads_available and self.sm['carControl'].latActive
-    ss.madsAvailable = self.mads_available
-
     ss.alertText1 = self.AM.current_alert.alert_text_1
     ss.alertText2 = self.AM.current_alert.alert_text_2
     ss.alertSize = self.AM.current_alert.alert_size
@@ -613,8 +608,7 @@ class SelfdriveD:
     self.update_mads_cruise_state(CS)
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
-      self.enabled, self.active = self.state_machine.update(self.events, lateral_only=self.mads_lateral_only,
-                                                            mads_requested=self.mads_main_requested)
+      self.enabled, self.active = self.state_machine.update(self.events, mads_requested=self.mads_main_requested)
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)

@@ -20,6 +20,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurv
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.lateral_path import model_lateral_path
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from openpilot.selfdrive.car.mads import is_mads_lateral_only
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -101,7 +102,7 @@ class Controls:
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
     CC.latActive = self.sm['selfdriveState'].active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
-    mads_lat_only = self.sm['selfdriveState'].state == State.lateralEnabled
+    mads_lat_only = is_mads_lateral_only(self.CP, CS)
     CC.longActive = CC.enabled and not mads_lat_only and \
                     not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
 

@@ -1,6 +1,7 @@
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
+from openpilot.selfdrive.car.mads import is_mads_configured
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
@@ -182,11 +183,10 @@ class HudRenderer(Widget):
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
 
   def _draw_mads_status(self, rect: rl.Rectangle) -> None:
-    ss = ui_state.sm["selfdriveState"]
-    if not ss.madsAvailable:
+    if ui_state.CP is None or not is_mads_configured(ui_state.CP):
       return
 
-    text = tr("MADS ON") if ss.madsEnabled else tr("MADS OFF")
+    text = tr("MADS ON") if ui_state.sm["carControl"].latActive else tr("MADS OFF")
     text_size = measure_text_cached(self._font_semi_bold, text, FONT_SIZES.mads)
     position = rl.Vector2(rect.x + rect.width - text_size.x - UI_CONFIG.border_size,
                           rect.y + UI_CONFIG.header_height + UI_CONFIG.border_size)
