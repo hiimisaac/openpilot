@@ -75,6 +75,9 @@ def main() -> None:
       projected_curvature = -float(vehicle_model.calc_curvature(
         math.radians(projected_steering_angle_deg), CS.vEgo, 0.0,
       ))
+      desired_angle_curvature = -float(vehicle_model.calc_curvature(
+        math.radians(CC.actuators.steeringAngleDeg), CS.vEgo, 0.0,
+      ))
       steering_angle_error_deg = CC.actuators.steeringAngleDeg - CS.steeringAngleDeg
       driver_override = driver_steering_opposes_command(
         CC.latActive and CS.steeringPressed,
@@ -90,6 +93,7 @@ def main() -> None:
         CC.latActive,
         driver_override,
         projected_measured_curvature=projected_curvature,
+        desired_angle_curvature=desired_angle_curvature,
       )
       shadow_command = _candidate_command(shadow_path)
       computation_time_s = (time.perf_counter_ns() - start_time) * 1e-9
@@ -114,6 +118,8 @@ def main() -> None:
       msg.fordLmc2Shadow.sendcanMonoTime = sm.logMonoTime["sendcan"]
       msg.fordLmc2Shadow.projectedCurvature = projected_curvature
       msg.fordLmc2Shadow.projectedSteeringAngleDeg = projected_steering_angle_deg
+      msg.fordLmc2Shadow.desiredAngleCurvature = desired_angle_curvature
+      msg.fordLmc2Shadow.previewConflictShare = shadow_controller.preview_conflict_share
       pm.send("fordLmc2Shadow", msg)
 
 

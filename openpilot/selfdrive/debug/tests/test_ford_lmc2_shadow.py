@@ -37,6 +37,8 @@ def test_shadow_log_preserves_live_and_shadow_polynomials():
   msg.fordLmc2Shadow.sendcanMonoTime = 123457999
   msg.fordLmc2Shadow.projectedCurvature = 0.002
   msg.fordLmc2Shadow.projectedSteeringAngleDeg = -12.0
+  msg.fordLmc2Shadow.desiredAngleCurvature = 0.004
+  msg.fordLmc2Shadow.previewConflictShare = 0.75
   msg.fordLmc2Shadow.liveCommand = {
     "pathOffset": 0.1,
     "pathAngle": 0.2,
@@ -57,6 +59,8 @@ def test_shadow_log_preserves_live_and_shadow_polynomials():
   assert msg.fordLmc2Shadow.sendcanMonoTime == 123457999
   assert math.isclose(msg.fordLmc2Shadow.projectedCurvature, 0.002, rel_tol=1e-6)
   assert math.isclose(msg.fordLmc2Shadow.projectedSteeringAngleDeg, -12.0, rel_tol=1e-6)
+  assert math.isclose(msg.fordLmc2Shadow.desiredAngleCurvature, 0.004, rel_tol=1e-6)
+  assert math.isclose(msg.fordLmc2Shadow.previewConflictShare, 0.75, rel_tol=1e-6)
   assert math.isclose(msg.fordLmc2Shadow.liveCommand.pathOffset, 0.1, rel_tol=1e-6)
   assert math.isclose(msg.fordLmc2Shadow.shadowCommand.curvatureRate, -0.0004, rel_tol=1e-6)
 

@@ -27,6 +27,8 @@ struct FordLmc2Shadow @0x81c2f05a394cf4af {
   sendcanMonoTime @13 :UInt64;
   projectedCurvature @14 :Float32;
   projectedSteeringAngleDeg @15 :Float32;
+  desiredAngleCurvature @16 :Float32;
+  previewConflictShare @17 :Float32;
 
   struct Lmc2Command {
     pathOffset @0 :Float32;
