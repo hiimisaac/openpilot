@@ -54,6 +54,25 @@ class TestMadsPedals:
     assert not self.selfdrive.mads_main_requested
     assert not self.selfdrive.mads_lateral_only
 
+  def test_pcm_cruise_main_and_acc_are_independent(self):
+    cs = car.CarState.new_message()
+    cs.canValid = True
+    cs.cruiseState.available = True
+    cs.cruiseState.enabled = False
+    self.selfdrive.update_mads_cruise_state(cs)
+    assert self.selfdrive.mads_main_requested
+    assert self.selfdrive.mads_lateral_only
+
+    cs.cruiseState.enabled = True
+    self.selfdrive.update_mads_cruise_state(cs)
+    assert self.selfdrive.mads_longitudinal_enabled
+    assert not self.selfdrive.mads_lateral_only
+
+    cs.cruiseState.enabled = False
+    self.selfdrive.update_mads_cruise_state(cs)
+    assert not self.selfdrive.mads_longitudinal_enabled
+    assert self.selfdrive.mads_lateral_only
+
   @staticmethod
   def button_event(button_type, pressed=True):
     event = car.CarState.ButtonEvent.new_message()
