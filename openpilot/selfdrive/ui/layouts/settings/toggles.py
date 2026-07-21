@@ -8,7 +8,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.selfdrive.ui.ui_state import ui_state
-from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
+from openpilot.selfdrive.car.mads import is_mads_available
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 
@@ -216,10 +216,10 @@ class TogglesLayout(Widget):
         self._toggles[toggle_def].action_item.set_enabled(not ui_state.engaged)
 
     if ui_state.CP is not None:
-      mads_supported = ui_state.CP.carFingerprint == HYUNDAI_CAR.HYUNDAI_SONATA
+      mads_supported = is_mads_available(ui_state.CP)
       mads_locked = "MadsEnabled" in self._locked_toggles
       self._toggles["MadsEnabled"].action_item.set_enabled(mads_supported and not mads_locked and not ui_state.engaged)
-      mads_description = DESCRIPTIONS["MadsEnabled"] if mads_supported else tr("MADS is currently available only on the Hyundai Sonata platform.")
+      mads_description = DESCRIPTIONS["MadsEnabled"] if mads_supported else tr("MADS is currently available only on Ford platforms.")
       self._toggles["MadsEnabled"].set_description(mads_description)
 
   def _render(self, rect):
