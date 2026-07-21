@@ -1,40 +1,13 @@
 import math
 
 from opendbc.can import CANPacker
-
 from openpilot.cereal import log
 from openpilot.selfdrive.debug.ford_lmc2_shadow import (
   decode_lmc2_command,
   Lmc2Command,
   polynomial_state,
-  SimpleLmc2Controller,
 )
-from openpilot.tools.ford_lmc2_shadow_report import summarize_pairs
-
-
-def test_shadow_uses_c2_alone_for_a_delivered_gentle_curve():
-  controller = SimpleLmc2Controller()
-
-  command = controller.update(0.003, 0.003, 15.0, active=True, driver_override=False)
-
-  assert math.isclose(command.curvature, 0.003)
-  assert command.path_angle == 0.0
-  assert command.path_offset == 0.0
-  assert command.curvature_rate == 0.0
-
-
-def test_shadow_continuously_moves_maneuver_authority_into_c0_c1():
-  controller = SimpleLmc2Controller()
-
-  midpoint = controller.update(0.009, 0.009, 7.0, active=True, driver_override=False)
-  tight_turn = controller.update(0.02, 0.01, 7.0, active=True, driver_override=False)
-
-  assert math.isclose(midpoint.curvature, 0.0045)
-  assert math.isclose(midpoint.path_angle, 0.0045 * 7.0)
-  assert math.isclose(midpoint.path_offset, 0.5 * 0.0045 * 7.0 ** 2)
-  assert tight_turn.curvature == 0.0
-  assert math.isclose(tight_turn.path_angle, 0.02 * 7.0)
-  assert math.isclose(tight_turn.path_offset, 0.5 * 0.02 * 7.0 ** 2)
+from openpilot.tools.ford_lmc2_shadow_report import summarize_pairs, timing_is_coherent
 
 
 def test_decode_lmc2_command_recovers_every_polynomial_coefficient():
@@ -58,6 +31,10 @@ def test_decode_lmc2_command_recovers_every_polynomial_coefficient():
 def test_shadow_log_preserves_live_and_shadow_polynomials():
   msg = log.Event.new_message(valid=True)
   msg.init("fordLmc2Shadow")
+  msg.fordLmc2Shadow.shadowValid = True
+  msg.fordLmc2Shadow.modelMonoTime = 123456789
+  msg.fordLmc2Shadow.carControlMonoTime = 123456999
+  msg.fordLmc2Shadow.sendcanMonoTime = 123457999
   msg.fordLmc2Shadow.liveCommand = {
     "pathOffset": 0.1,
     "pathAngle": 0.2,
@@ -72,6 +49,10 @@ def test_shadow_log_preserves_live_and_shadow_polynomials():
   }
 
   assert msg.which() == "fordLmc2Shadow"
+  assert msg.fordLmc2Shadow.shadowValid
+  assert msg.fordLmc2Shadow.modelMonoTime == 123456789
+  assert msg.fordLmc2Shadow.carControlMonoTime == 123456999
+  assert msg.fordLmc2Shadow.sendcanMonoTime == 123457999
   assert math.isclose(msg.fordLmc2Shadow.liveCommand.pathOffset, 0.1, rel_tol=1e-6)
   assert math.isclose(msg.fordLmc2Shadow.shadowCommand.curvatureRate, -0.0004, rel_tol=1e-6)
 
@@ -97,3 +78,30 @@ def test_shadow_report_summarizes_coefficients_and_polynomial_shape():
   assert math.isclose(summary["coefficients"]["curvature"]["mae"], 0.001)
   assert summary["polynomial"]["7m"]["pathOffset"]["mae"] > 0.0
   assert math.isclose(summary["computationTimeS"]["mean"], 0.00005)
+
+
+def test_shadow_report_keeps_signed_bias_separate_from_absolute_error():
+  live = Lmc2Command(path_offset=0.2)
+  shadow = Lmc2Command(path_offset=0.1)
+
+  summary = summarize_pairs([(live, shadow, 0.0)])
+
+  assert math.isclose(summary["coefficients"]["pathOffset"]["mean"], -0.1)
+  assert math.isclose(summary["coefficients"]["pathOffset"]["mae"], 0.1)
+
+
+def test_shadow_report_includes_model_and_transport_age():
+  command = Lmc2Command()
+
+  summary = summarize_pairs([(command, command, 0.00005, 0.02, 0.01)])
+
+  assert math.isclose(summary["modelToControlAgeS"]["mean"], 0.02)
+  assert math.isclose(summary["controlToCanAgeS"]["mean"], 0.01)
+
+
+def test_shadow_report_rejects_future_or_stale_inputs():
+  assert timing_is_coherent(0.02, 0.01)
+  assert not timing_is_coherent(-0.001, 0.01)
+  assert not timing_is_coherent(0.101, 0.01)
+  assert not timing_is_coherent(0.02, -0.001)
+  assert not timing_is_coherent(0.02, 0.031)

@@ -5,13 +5,13 @@ import time
 import openpilot.cereal.messaging as messaging
 from openpilot.common.params import Params
 from opendbc.car import structs
+from opendbc.car.ford.lateral_path_shadow import LatControlPath
 from opendbc.car.ford.lateral_path_state import driver_steering_opposes_command
 from opendbc.car.vehicle_model import VehicleModel
 
 from openpilot.selfdrive.debug.ford_lmc2_shadow import (
   decode_lmc2_command,
   Lmc2Command,
-  SimpleLmc2Controller,
 )
 
 
@@ -37,12 +37,21 @@ def _controller_sign(command: Lmc2Command) -> Lmc2Command:
   )
 
 
+def _candidate_command(command) -> Lmc2Command:
+  return Lmc2Command(
+    path_offset=command.path_offset,
+    path_angle=command.path_angle,
+    curvature=command.curvature,
+    curvature_rate=command.curvature_rate,
+  )
+
+
 def main() -> None:
   CP = messaging.log_from_bytes(Params().get("CarParams", block=True), structs.CarParams)
   vehicle_model = VehicleModel(CP)
-  shadow_controller = SimpleLmc2Controller()
+  shadow_controller = LatControlPath()
 
-  sm = messaging.SubMaster(["carControl", "carState", "sendcan"], poll="sendcan")
+  sm = messaging.SubMaster(["carControl", "carState", "modelV2", "sendcan"], poll="sendcan")
   pm = messaging.PubMaster(["fordLmc2Shadow"])
 
   while True:
@@ -67,18 +76,21 @@ def main() -> None:
         CS.steeringTorque,
         steering_angle_error_deg,
       )
-      shadow_command = shadow_controller.update(
+      model_valid = sm.valid["modelV2"] and sm.logMonoTime["modelV2"] != 0
+      shadow_path = shadow_controller.update(
+        sm["modelV2"] if model_valid else None,
         CC.actuators.curvature,
         measured_curvature,
         CS.vEgo,
         CC.latActive,
         driver_override,
       )
+      shadow_command = _candidate_command(shadow_path)
       computation_time_s = (time.perf_counter_ns() - start_time) * 1e-9
 
       msg = messaging.new_message(
         "fordLmc2Shadow",
-        valid=sm.all_checks(["carControl", "carState", "sendcan"]),
+        valid=sm.all_checks(["carControl", "carState", "modelV2", "sendcan"]),
       )
       msg.fordLmc2Shadow.active = CC.latActive
       msg.fordLmc2Shadow.driverOverride = driver_override
@@ -90,6 +102,10 @@ def main() -> None:
       msg.fordLmc2Shadow.liveCommand = _command_dict(live_command)
       msg.fordLmc2Shadow.shadowCommand = _command_dict(shadow_command)
       msg.fordLmc2Shadow.computationTimeS = computation_time_s
+      msg.fordLmc2Shadow.shadowValid = shadow_path.valid
+      msg.fordLmc2Shadow.modelMonoTime = sm.logMonoTime["modelV2"] if model_valid else 0
+      msg.fordLmc2Shadow.carControlMonoTime = sm.logMonoTime["carControl"]
+      msg.fordLmc2Shadow.sendcanMonoTime = sm.logMonoTime["sendcan"]
       pm.send("fordLmc2Shadow", msg)
 
 
