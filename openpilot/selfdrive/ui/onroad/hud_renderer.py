@@ -1,6 +1,7 @@
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
+from openpilot.selfdrive.car.mads import is_mads_configured
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
@@ -31,6 +32,7 @@ class FontSizes:
   speed_unit: int = 66
   max_speed: int = 40
   set_speed: int = 90
+  mads: int = 42
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,7 @@ class HudRenderer(Widget):
       self._draw_set_speed(rect)
 
     self._draw_current_speed(rect)
+    self._draw_mads_status(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
@@ -178,3 +181,13 @@ class HudRenderer(Widget):
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
+
+  def _draw_mads_status(self, rect: rl.Rectangle) -> None:
+    if ui_state.CP is None or not is_mads_configured(ui_state.CP):
+      return
+
+    text = tr("MADS ON") if ui_state.sm["carControl"].latActive else tr("MADS OFF")
+    text_size = measure_text_cached(self._font_semi_bold, text, FONT_SIZES.mads)
+    position = rl.Vector2(rect.x + rect.width - text_size.x - UI_CONFIG.border_size,
+                          rect.y + UI_CONFIG.header_height + UI_CONFIG.border_size)
+    rl.draw_text_ex(self._font_semi_bold, text, position, FONT_SIZES.mads, 0, COLORS.WHITE)
