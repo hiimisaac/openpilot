@@ -18,6 +18,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
+from openpilot.selfdrive.controls.lib.lateral_path import model_lateral_path
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.car.mads import is_mads_lateral_only
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
@@ -140,6 +141,14 @@ class Controls:
       actuators.curvature = float(lateral_output)
     else:
       actuators.steeringAngleDeg = float(lateral_output)
+    if self.CP.steerControlType == car.CarParams.SteerControlType.path:
+      path = model_lateral_path(model_v2 if self.sm.valid['modelV2'] else None,
+                                actuators.curvature, CS.vEgo)
+      actuators.lateralPath.valid = path.valid
+      actuators.lateralPath.pathOffset = path.path_offset
+      actuators.lateralPath.pathAngle = path.path_angle
+      actuators.lateralPath.curvature = path.curvature
+      actuators.lateralPath.curvatureRate = path.curvature_rate
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)

@@ -10,32 +10,7 @@ $Cxx.namespace("cereal");
 # DO rename the structs
 # DON'T change the identifier (e.g. @0x81c2f05a394cf4af)
 
-struct FordLmc2Shadow @0x81c2f05a394cf4af {
-  active @0 :Bool;
-  driverOverride @1 :Bool;
-  vEgo @2 :Float32;
-  desiredCurvature @3 :Float32;
-  desiredSteeringAngleDeg @4 :Float32;
-  measuredCurvature @5 :Float32;
-  measuredSteeringAngleDeg @6 :Float32;
-  liveCommand @7 :Lmc2Command;
-  shadowCommand @8 :Lmc2Command;
-  computationTimeS @9 :Float32;
-  shadowValid @10 :Bool;
-  modelMonoTime @11 :UInt64;
-  carControlMonoTime @12 :UInt64;
-  sendcanMonoTime @13 :UInt64;
-  projectedCurvature @14 :Float32;
-  projectedSteeringAngleDeg @15 :Float32;
-  desiredAngleCurvature @16 :Float32;
-  previewConflictShare @17 :Float32;
-
-  struct Lmc2Command {
-    pathOffset @0 :Float32;
-    pathAngle @1 :Float32;
-    curvature @2 :Float32;
-    curvatureRate @3 :Float32;
-  }
+struct CustomReserved0 @0x81c2f05a394cf4af {
 }
 
 struct CustomReserved1 @0xaedffd8f31e7b55d {

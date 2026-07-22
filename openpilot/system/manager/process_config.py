@@ -2,7 +2,6 @@ import os
 import operator
 import platform
 
-from opendbc.car.ford.values import FordFlags
 from opendbc.car.structs import car
 from openpilot.common.params import Params
 from openpilot.common.hardware import PC, TICI
@@ -56,9 +55,6 @@ def always_run(started: bool, params: Params, CP: car.CarParams) -> bool:
 def only_onroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started
 
-def ford_lmc2_shadow(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return started and CP.brand == "ford" and bool(CP.flags & FordFlags.CANFD)
-
 def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started
 
@@ -103,8 +99,6 @@ procs = [
   PythonProcess("joystickd", "openpilot.tools.joystick.joystickd", or_(joystick, notcar)),
   PythonProcess("selfdrived", "openpilot.selfdrive.selfdrived.selfdrived", only_onroad),
   PythonProcess("card", "openpilot.selfdrive.car.card", only_onroad),
-  PythonProcess("ford_lmc2_shadowd", "openpilot.selfdrive.debug.ford_lmc2_shadowd", ford_lmc2_shadow,
-                restart_if_crash=True),
   PythonProcess("deleter", "openpilot.system.loggerd.deleter", always_run),
   PythonProcess("dmonitoringd", "openpilot.selfdrive.monitoring.dmonitoringd", driverview, enabled=(WEBCAM or not PC)),
   PythonProcess("qcomgpsd", "openpilot.system.qcomgpsd.qcomgpsd", qcomgps, enabled=TICI),
