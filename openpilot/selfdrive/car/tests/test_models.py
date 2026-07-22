@@ -186,7 +186,7 @@ class TestCarModelBase(OpenpilotTestCase):
     # make sure car params are within a valid range
     self.assertGreater(self.CP.mass, 1)
 
-    if self.CP.steerControlType not in (SteerControlType.angle, SteerControlType.curvature):
+    if self.CP.steerControlType not in (SteerControlType.angle, SteerControlType.curvature, SteerControlType.path):
       tuning = self.CP.lateralTuning.which()
       if tuning == 'pid':
         self.assertTrue(len(self.CP.lateralTuning.pid.kpV))
@@ -321,7 +321,7 @@ class TestCarModelBase(OpenpilotTestCase):
     msg_strategy = st.binary(min_size=size, max_size=size)
     msgs = data.draw(st.lists(msg_strategy, min_size=20))
 
-    vehicle_speed_seen = self.CP.steerControlType == SteerControlType.angle and not self.CP.notCar
+    vehicle_speed_seen = self.CP.steerControlType in (SteerControlType.angle, SteerControlType.path) and not self.CP.notCar
 
     for n, dat in enumerate(msgs):
       # due to panda updating state selectively, only edges are expected to match
@@ -395,7 +395,7 @@ class TestCarModelBase(OpenpilotTestCase):
     controls_allowed_prev = False
     CS_prev = car.CarState.new_message()
     checks = defaultdict(int)
-    vehicle_speed_seen = self.CP.steerControlType == SteerControlType.angle and not self.CP.notCar
+    vehicle_speed_seen = self.CP.steerControlType in (SteerControlType.angle, SteerControlType.path) and not self.CP.notCar
     for idx, can in enumerate(self.can_msgs):
       CS = self.CI.update(can).as_reader()
       for msg in filter(lambda m: m.src < 64, can[1]):
