@@ -85,6 +85,9 @@ class DeveloperLayoutMici(NavScroller):
     self._debug_mode_toggle = BigParamControl("ui debug mode", "ShowDebugInfo",
                                               toggle_callback=lambda checked: (gui_app.set_show_touches(checked),
                                                                                gui_app.set_show_fps(checked)))
+    self._ghost_wheel_toggle = BigParamControl(
+      "ghost wheel", "GhostWheelEnabled", toggle_callback=self._on_enable_ghost_wheel,
+    )
 
     self._scroller.add_widgets([
       self._adb_toggle,
@@ -95,6 +98,7 @@ class DeveloperLayoutMici(NavScroller):
       self._lat_maneuver_toggle,
       self._alpha_long_toggle,
       self._debug_mode_toggle,
+      self._ghost_wheel_toggle,
     ])
 
     # Toggle lists
@@ -106,9 +110,13 @@ class DeveloperLayoutMici(NavScroller):
       ("LateralManeuverMode", self._lat_maneuver_toggle),
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
       ("ShowDebugInfo", self._debug_mode_toggle),
+      ("GhostWheelEnabled", self._ghost_wheel_toggle),
     )
     onroad_blocked_toggles = (self._adb_toggle, self._joystick_toggle)
-    release_blocked_toggles = (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle)
+    release_blocked_toggles = (
+      self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle,
+      self._alpha_long_toggle, self._ghost_wheel_toggle,
+    )
     engaged_blocked_toggles = (self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle)
 
     # Hide non-release toggles on release builds
@@ -168,6 +176,9 @@ class DeveloperLayoutMici(NavScroller):
     self._long_maneuver_toggle.set_checked(False)
     ui_state.params.put_bool("LateralManeuverMode", False, block=True)
     self._lat_maneuver_toggle.set_checked(False)
+
+  def _on_enable_ghost_wheel(self, state: bool):
+    ui_state.ghost_wheel_enabled = state
 
   def _on_long_maneuver_mode(self, state: bool):
     ui_state.params.put_bool("LongitudinalManeuverMode", state, block=True)

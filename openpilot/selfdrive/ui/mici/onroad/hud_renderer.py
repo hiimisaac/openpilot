@@ -34,6 +34,7 @@ class FontSizes:
 class Colors:
   WHITE = rl.WHITE
   WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
+  GHOST_WHEEL = rl.Color(70, 220, 255, 56)
 
 
 FONT_SIZES = FontSizes()
@@ -126,6 +127,7 @@ class HudRenderer(Widget):
 
     self._wheel_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
     self._wheel_y_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
+    self._ghost_wheel_alpha_filter = FirstOrderFilter(0, 0.12, 1 / gui_app.target_fps)
 
     self._set_speed_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
 
@@ -221,6 +223,18 @@ class HudRenderer(Widget):
     src_rect = rl.Rectangle(0, 0, wheel_txt.width, wheel_txt.height)
     dest_rect = rl.Rectangle(pos_x, pos_y, wheel_txt.width, wheel_txt.height)
     origin = (wheel_txt.width / 2, wheel_txt.height / 2)
+
+    sm = ui_state.sm
+    angle_control = sm['controlsState'].lateralControlState.which() in ('angleState', 'pidState')
+    messages_valid = all(sm.alive[s] and sm.valid[s] for s in ('carState', 'carControl', 'controlsState'))
+    ghost_alpha = self._ghost_wheel_alpha_filter.update(float(
+      ui_state.ghost_wheel_enabled and sm['carControl'].latActive and angle_control and messages_valid and not self._show_wheel_critical,
+    ))
+    if ghost_alpha > 1e-2 and not self._show_wheel_critical:
+      desired_rotation = -ui_state.sm['carControl'].actuators.steeringAngleDeg
+      ghost_color = rl.Color(COLORS.GHOST_WHEEL.r, COLORS.GHOST_WHEEL.g, COLORS.GHOST_WHEEL.b,
+                             int(COLORS.GHOST_WHEEL.a * ghost_alpha))
+      rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, desired_rotation, ghost_color)
 
     # color and draw
     color = rl.Color(255, 255, 255, int(self._wheel_alpha_filter.x))

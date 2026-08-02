@@ -173,8 +173,32 @@ def send_onroad(pm: PubMaster) -> None:
   ps.pandaStates[0].pandaType = log.PandaState.PandaType.dos
   ps.pandaStates[0].ignitionLine = True
 
+  ss = messaging.new_message('selfdriveState', valid=True)
+  ss.selfdriveState.state = log.SelfdriveState.OpenpilotState.enabled
+  ss.selfdriveState.enabled = True
+  ss.selfdriveState.active = True
+  ss.selfdriveState.engageable = True
+
+  car_state = messaging.new_message('carState', valid=True)
+  car_state.carState.vEgo = 12.0
+  car_state.carState.steeringAngleDeg = -18.0
+
+  car_control = messaging.new_message('carControl', valid=True)
+  car_control.carControl.latActive = True
+  car_control.carControl.actuators.steeringAngleDeg = 28.0
+
+  controls_state = messaging.new_message('controlsState', valid=True)
+  angle_state = controls_state.controlsState.lateralControlState.init('angleState')
+  angle_state.active = True
+  angle_state.steeringAngleDeg = car_state.carState.steeringAngleDeg
+  angle_state.steeringAngleDesiredDeg = car_control.carControl.actuators.steeringAngleDeg
+
   pm.send('deviceState', ds)
   pm.send('pandaStates', ps)
+  pm.send('selfdriveState', ss)
+  pm.send('carState', car_state)
+  pm.send('carControl', car_control)
+  pm.send('controlsState', controls_state)
 
 
 def make_network_state_setup(pm: PubMaster, network_type) -> Callable:

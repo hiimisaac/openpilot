@@ -90,6 +90,13 @@ class DeveloperLayout(Widget):
     )
     self._on_enable_ui_debug(self._params.get_bool("ShowDebugInfo"))
 
+    self._ghost_wheel_toggle = toggle_item(
+      "Ghost Wheel",
+      description="Shows desired steering behind the measured steering wheel while lateral control is active.",
+      initial_state=self._params.get_bool("GhostWheelEnabled"),
+      callback=self._on_enable_ghost_wheel,
+    )
+
     self._scroller = Scroller([
       self._adb_toggle,
       self._ssh_toggle,
@@ -99,6 +106,7 @@ class DeveloperLayout(Widget):
       self._lat_maneuver_toggle,
       self._alpha_long_toggle,
       self._ui_debug_toggle,
+      self._ghost_wheel_toggle,
     ], line_separator=True, spacing=0)
 
     # Toggles should be not available to change in onroad state
@@ -117,7 +125,8 @@ class DeveloperLayout(Widget):
 
     # Hide non-release toggles on release builds
     # TODO: we can do an onroad cycle, but alpha long toggle requires a deinit function to re-enable radar and not fault
-    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle, self._alpha_long_toggle):
+    for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle,
+                 self._alpha_long_toggle, self._ghost_wheel_toggle):
       item.set_visible(not self._is_release)
 
     # CP gating
@@ -147,6 +156,7 @@ class DeveloperLayout(Widget):
       ("LateralManeuverMode", self._lat_maneuver_toggle),
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
       ("ShowDebugInfo", self._ui_debug_toggle),
+      ("GhostWheelEnabled", self._ghost_wheel_toggle),
     ):
       item.action_item.set_state(self._params.get_bool(key))
 
@@ -154,6 +164,10 @@ class DeveloperLayout(Widget):
     self._params.put_bool("ShowDebugInfo", state, block=True)
     gui_app.set_show_touches(state)
     gui_app.set_show_fps(state)
+
+  def _on_enable_ghost_wheel(self, state: bool):
+    self._params.put_bool("GhostWheelEnabled", state, block=True)
+    ui_state.ghost_wheel_enabled = state
 
   def _on_enable_adb(self, state: bool):
     self._params.put_bool("AdbEnabled", state, block=True)

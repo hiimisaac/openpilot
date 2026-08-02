@@ -51,6 +51,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"GithubSshKeys", {PERSISTENT, STRING}},
     {"GithubUsername", {PERSISTENT, STRING}},
     {"GitRemote", {PERSISTENT, STRING}},
+    {"GhostWheelEnabled", {PERSISTENT | DEVELOPMENT_ONLY, BOOL}},
     {"GsmApn", {PERSISTENT, STRING}},
     {"GsmMetered", {PERSISTENT, BOOL, "1"}},
     {"GsmRoaming", {PERSISTENT, BOOL}},

@@ -35,6 +35,7 @@ def setup_state():
   params.put("GitBranch", "test-branch", block=True)
   params.put("GitCommit", "abc12340ff9131237ba23a1d0fbd8edf9c80e87", block=True)
   params.put("GitCommitDate", "'1732924800 2024-11-30 00:00:00 +0000'", block=True)
+  params.put_bool("GhostWheelEnabled", True, block=True)
 
   # Patch Api.get_token to return a static token so the pairing QR code is deterministic across runs
   Api.get_token = lambda self, payload_extra=None, expiry_hours=0: "test_token"
@@ -65,7 +66,10 @@ def run_replay(variant: LayoutVariant) -> None:
   # and after 30s of real wall-clock time the settings panel would close automatically.
   device.set_override_interactive_timeout(99999)
 
-  pm = PubMaster(["deviceState", "pandaStates", "driverStateV2", "selfdriveState"])
+  pm = PubMaster([
+    "deviceState", "pandaStates", "driverStateV2", "selfdriveState",
+    "carState", "carControl", "controlsState",
+  ])
   script = build_script(pm, main_layout, variant)
   script_index = 0
 

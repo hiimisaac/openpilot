@@ -1,6 +1,7 @@
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
+from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.car.mads import is_mads_configured
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
@@ -24,6 +25,7 @@ class UIConfig:
   set_speed_width_imperial: int = 172
   set_speed_height: int = 204
   wheel_icon_size: int = 144
+  steering_wheel_size: int = 144
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class Colors:
   BORDER_TRANSLUCENT = rl.Color(255, 255, 255, 75)
   HEADER_GRADIENT_START = rl.Color(0, 0, 0, 114)
   HEADER_GRADIENT_END = rl.BLANK
+  GHOST_WHEEL = rl.Color(70, 220, 255, 56)
 
 
 UI_CONFIG = UIConfig()
@@ -73,6 +76,10 @@ class HudRenderer(Widget):
     self._font_medium: rl.Font = gui_app.font(FontWeight.MEDIUM)
 
     self._exp_button: ExpButton = ExpButton(UI_CONFIG.button_size, UI_CONFIG.wheel_icon_size)
+    self._txt_steering_wheel: rl.Texture = gui_app.texture(
+      'icons/chffr_wheel.png', UI_CONFIG.steering_wheel_size, UI_CONFIG.steering_wheel_size,
+    )
+    self._steering_wheel_alpha_filter = FirstOrderFilter(0.0, 0.12, 1 / gui_app.target_fps)
 
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
@@ -119,10 +126,43 @@ class HudRenderer(Widget):
 
     self._draw_current_speed(rect)
     self._draw_mads_status(rect)
+    self._draw_steering_wheel(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
     self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
+
+  def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
+    """Show desired steering behind the measured wheel while lateral control is active."""
+    sm = ui_state.sm
+    angle_control = sm['controlsState'].lateralControlState.which() in ('angleState', 'pidState')
+    messages_valid = all(sm.alive[s] and sm.valid[s] for s in ('carState', 'carControl', 'controlsState'))
+    alpha = self._steering_wheel_alpha_filter.update(float(
+      ui_state.ghost_wheel_enabled and sm['carControl'].latActive and angle_control and messages_valid,
+    ))
+    if alpha < 1e-2:
+      return
+
+    # Balance the driver-monitoring icon by placing the wheel on the opposite side.
+    is_rhd = sm['driverMonitoringState'].isRHD
+    edge_offset = UI_CONFIG.border_size + UI_CONFIG.button_size / 2
+    pos_x = rect.x + edge_offset if is_rhd else rect.x + rect.width - edge_offset
+    pos_y = rect.y + rect.height - edge_offset
+
+    rl.draw_circle(int(pos_x), int(pos_y), UI_CONFIG.button_size / 2, rl.Color(0, 0, 0, int(70 * alpha)))
+
+    wheel_txt = self._txt_steering_wheel
+    src_rect = rl.Rectangle(0, 0, wheel_txt.width, wheel_txt.height)
+    dest_rect = rl.Rectangle(pos_x, pos_y, wheel_txt.width, wheel_txt.height)
+    origin = rl.Vector2(wheel_txt.width / 2, wheel_txt.height / 2)
+
+    actual_angle = -sm['carState'].steeringAngleDeg
+    desired_angle = -sm['carControl'].actuators.steeringAngleDeg
+
+    ghost_color = rl.Color(COLORS.GHOST_WHEEL.r, COLORS.GHOST_WHEEL.g, COLORS.GHOST_WHEEL.b,
+                           int(COLORS.GHOST_WHEEL.a * alpha))
+    rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, desired_angle, ghost_color)
+    rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, actual_angle, rl.fade(rl.WHITE, alpha))
 
   def user_interacting(self) -> bool:
     return self._exp_button.is_pressed
