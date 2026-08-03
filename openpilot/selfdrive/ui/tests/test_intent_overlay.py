@@ -28,6 +28,8 @@ def empty_model():
     meta=message(laneChangeState='off', laneChangeDirection='none'),
     laneLines=[],
     laneLineProbs=[],
+    roadEdges=[],
+    roadEdgeStds=[],
   )
 
 
@@ -178,6 +180,15 @@ def test_controlling_lead_matches_longitudinal_source():
     assert state.controlling_lead_index == lead_index
 
 
+def test_intent_card_does_not_claim_inactive_longitudinal_control():
+  plan = empty_plan()
+  plan.longitudinalPlanSource = 'lead0'
+  state = derive_intent_state(empty_model(), plan, empty_car_state())
+
+  assert IntentOverlay._intent_card_text(state, lateral_active=True, longitudinal_active=False) is None
+  assert IntentOverlay._intent_card_text(state, lateral_active=True, longitudinal_active=True) == "FOLLOWING VEHICLE"
+
+
 def test_projection_uses_absolute_big_coordinates_and_rect_local_compact_coordinates():
   rect = rl.Rectangle(100, 50, 300, 180)
   transform = np.eye(3)
@@ -214,11 +225,13 @@ def test_big_renderer_forwards_transform_and_current_intent_state():
   with patch.object(big_model_renderer.ui_state, 'sm', sm), \
        patch.object(big_model_renderer.ui_state, 'started_frame', 0), \
        patch.object(big_model_renderer.ui_state, 'driving_intent_enabled', True), \
-       patch.object(renderer, '_draw_lane_lines'), \
-       patch.object(renderer, '_draw_path'), \
+       patch.object(renderer, '_draw_lane_lines') as draw_lanes, \
+       patch.object(renderer, '_draw_path') as draw_path, \
        patch.object(renderer._intent_overlay, 'render_intent') as render:
     renderer._render(rect)
 
+  draw_lanes.assert_not_called()
+  draw_path.assert_not_called()
   render.assert_called_once_with(rect, sm, enabled=True, longitudinal_control=True, path_offset_z=1.25)
 
 
@@ -237,12 +250,32 @@ def test_compact_renderer_forwards_transform_and_current_intent_state():
        patch.object(mici_model_renderer.ui_state, 'started_frame', 0), \
        patch.object(mici_model_renderer.ui_state, 'status', UIStatus.ENGAGED), \
        patch.object(mici_model_renderer.ui_state, 'driving_intent_enabled', True), \
-       patch.object(renderer, '_draw_lane_lines'), \
-       patch.object(renderer, '_draw_path'), \
+       patch.object(renderer, '_draw_lane_lines') as draw_lanes, \
+       patch.object(renderer, '_draw_path') as draw_path, \
        patch.object(renderer._intent_overlay, 'render_intent') as render:
     renderer._render(rect)
 
+  draw_lanes.assert_not_called()
+  draw_path.assert_not_called()
   render.assert_called_once_with(rect, sm, enabled=True, longitudinal_control=True, path_offset_z=1.25)
+
+
+def test_enabled_overlay_keeps_stock_road_visuals_when_lateral_inactive():
+  renderer = big_model_renderer.ModelRenderer()
+  renderer._transform_dirty = False
+  sm = renderer_submaster()
+  sm['carControl'].latActive = False
+
+  with patch.object(big_model_renderer.ui_state, 'sm', sm), \
+       patch.object(big_model_renderer.ui_state, 'started_frame', 0), \
+       patch.object(big_model_renderer.ui_state, 'driving_intent_enabled', True), \
+       patch.object(renderer, '_draw_lane_lines') as draw_lanes, \
+       patch.object(renderer, '_draw_path') as draw_path, \
+       patch.object(renderer._intent_overlay, 'render_intent'):
+    renderer._render(rl.Rectangle(0, 0, 400, 220))
+
+  draw_lanes.assert_called_once()
+  draw_path.assert_called_once_with(sm)
 
 
 def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
@@ -259,6 +292,11 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
     for offset in (5.2, 1.8, -1.8, -5.2)
   ]
   model.laneLineProbs = [0.9] * 4
+  model.roadEdges = [
+    message(x=lane_x, y=[offset] * 4, z=[1.0] * 4)
+    for offset in (6.8, -6.8)
+  ]
+  model.roadEdgeStds = [0.2, 0.2]
 
   plan = message(
     shouldStop=True,
@@ -284,7 +322,15 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
   ]))
   with patch.object(intent_overlay, 'draw_polygon') as draw_polygon, \
        patch.object(intent_overlay.rl, 'draw_line_ex') as draw_line, \
-       patch.object(intent_overlay.rl, 'draw_triangle_fan') as draw_chevron, \
+       patch.object(intent_overlay.rl, 'draw_triangle_fan') as draw_vehicle, \
+       patch.object(intent_overlay.rl, 'draw_ellipse'), \
+       patch.object(intent_overlay.rl, 'draw_rectangle_gradient_v'), \
+       patch.object(intent_overlay.rl, 'draw_rectangle_rounded'), \
+       patch.object(intent_overlay.rl, 'draw_rectangle_rounded_lines_ex'), \
+       patch.object(intent_overlay.rl, 'draw_circle'), \
+       patch.object(intent_overlay.rl, 'draw_text_ex'), \
+       patch.object(intent_overlay.gui_app, 'font', return_value=message()), \
+       patch.object(intent_overlay, 'measure_text_cached', return_value=rl.Vector2(240.0, 34.0)), \
        patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
     state = overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
                                   longitudinal_control=True, path_offset_z=1.0)
@@ -292,7 +338,7 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
   assert state is not None
   assert draw_polygon.called
   assert draw_line.call_count >= 10
-  assert draw_chevron.call_count >= 2
+  assert draw_vehicle.call_count == 2
 
 
 def test_geometry_smoothing_interpolates_without_lagging_first_frame():
@@ -309,7 +355,7 @@ def test_geometry_smoothing_interpolates_without_lagging_first_frame():
   assert np.all((third > second) & (third < target))
 
 
-def test_big_overlay_draws_smoothly_animated_path_chevrons():
+def test_big_overlay_draws_single_smoothly_animated_path_pulse():
   times = [0.0, 1.0, 2.0, 3.0, 4.0]
   model = empty_model()
   model.position = message(t=times, x=[1.0, 9.0, 18.0, 28.0, 40.0],
@@ -333,13 +379,14 @@ def test_big_overlay_draws_smoothly_animated_path_chevrons():
   frames = []
   for now in (0.0, 0.25):
     with patch.object(intent_overlay, 'draw_polygon'), \
-         patch.object(intent_overlay.rl, 'draw_line_ex'), \
-         patch.object(intent_overlay.rl, 'draw_circle'), \
-         patch.object(intent_overlay.rl, 'draw_triangle_fan') as draw_chevron, \
+         patch.object(intent_overlay.rl, 'draw_line_ex') as draw_line, \
+         patch.object(intent_overlay.rl, 'draw_triangle_fan') as draw_shape, \
+         patch.object(intent_overlay.rl, 'draw_rectangle_gradient_v'), \
          patch.object(intent_overlay.rl, 'get_time', return_value=now):
       overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
                             longitudinal_control=False, path_offset_z=1.0)
-    frames.append([call.args[0] for call in draw_chevron.call_args_list])
+    frames.append([call.args[3].a for call in draw_line.call_args_list])
+    assert draw_shape.call_count == 0
 
-  assert len(frames[0]) >= 6
+  assert len(frames[0]) >= 8
   assert frames[0] != frames[1]
