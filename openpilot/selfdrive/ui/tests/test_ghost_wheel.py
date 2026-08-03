@@ -56,6 +56,13 @@ class TestGhostWheel(unittest.TestCase):
     self.assertEqual(draw_texture.call_count, 2)
     self.assertEqual(draw_texture.call_args_list[0].args[4], -28.0)
     self.assertEqual(draw_texture.call_args_list[1].args[4], 18.0)
+    ghost_dest = draw_texture.call_args_list[0].args[2]
+    actual_dest = draw_texture.call_args_list[1].args[2]
+    ghost_color = draw_texture.call_args_list[0].args[5]
+    self.assertGreater(ghost_dest.width, actual_dest.width)
+    self.assertGreater(ghost_dest.height, actual_dest.height)
+    self.assertGreaterEqual(ghost_color.a, 128)
+    self.assertGreater(ghost_color.b, ghost_color.r)
     self.assertIs(draw_texture.call_args_list[1].args[5], actual_color)
     draw_circle.assert_called_once()
 
@@ -100,6 +107,13 @@ class TestGhostWheel(unittest.TestCase):
     self.assertEqual(draw_texture.call_count, 2)
     self.assertEqual(draw_texture.call_args_list[0].args[4], -28.0)
     self.assertEqual(draw_texture.call_args_list[1].args[4], 18.0)
+    ghost_dest = draw_texture.call_args_list[0].args[2]
+    actual_dest = draw_texture.call_args_list[1].args[2]
+    ghost_color = draw_texture.call_args_list[0].args[5]
+    self.assertGreater(ghost_dest.width, actual_dest.width)
+    self.assertGreater(ghost_dest.height, actual_dest.height)
+    self.assertGreaterEqual(ghost_color.a, 128)
+    self.assertGreater(ghost_color.b, ghost_color.r)
 
 
 if __name__ == '__main__':

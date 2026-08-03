@@ -14,6 +14,7 @@ from openpilot.system.ui.widgets import Widget
 SET_SPEED_NA = 255
 KM_TO_MILE = 0.621371
 CRUISE_DISABLED_CHAR = '–'
+GHOST_WHEEL_SCALE = 1.1
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ class Colors:
   BORDER_TRANSLUCENT = rl.Color(255, 255, 255, 75)
   HEADER_GRADIENT_START = rl.Color(0, 0, 0, 114)
   HEADER_GRADIENT_END = rl.BLANK
-  GHOST_WHEEL = rl.Color(70, 220, 255, 56)
+  GHOST_WHEEL = rl.Color(70, 220, 255, 160)
 
 
 UI_CONFIG = UIConfig()
@@ -155,13 +156,17 @@ class HudRenderer(Widget):
     src_rect = rl.Rectangle(0, 0, wheel_txt.width, wheel_txt.height)
     dest_rect = rl.Rectangle(pos_x, pos_y, wheel_txt.width, wheel_txt.height)
     origin = rl.Vector2(wheel_txt.width / 2, wheel_txt.height / 2)
+    ghost_width = wheel_txt.width * GHOST_WHEEL_SCALE
+    ghost_height = wheel_txt.height * GHOST_WHEEL_SCALE
+    ghost_dest_rect = rl.Rectangle(pos_x, pos_y, ghost_width, ghost_height)
+    ghost_origin = rl.Vector2(ghost_width / 2, ghost_height / 2)
 
     actual_angle = -sm['carState'].steeringAngleDeg
     desired_angle = -sm['carControl'].actuators.steeringAngleDeg
 
     ghost_color = rl.Color(COLORS.GHOST_WHEEL.r, COLORS.GHOST_WHEEL.g, COLORS.GHOST_WHEEL.b,
                            int(COLORS.GHOST_WHEEL.a * alpha))
-    rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, desired_angle, ghost_color)
+    rl.draw_texture_pro(wheel_txt, src_rect, ghost_dest_rect, ghost_origin, desired_angle, ghost_color)
     rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, actual_angle, rl.fade(rl.WHITE, alpha))
 
   def user_interacting(self) -> bool:

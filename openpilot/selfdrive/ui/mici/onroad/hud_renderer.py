@@ -17,6 +17,7 @@ EventName = log.OnroadEvent.EventName
 SET_SPEED_NA = 255
 KM_TO_MILE = 0.621371
 CRUISE_DISABLED_CHAR = '–'
+GHOST_WHEEL_SCALE = 1.1
 
 SET_SPEED_PERSISTENCE = 2.5  # seconds
 
@@ -34,7 +35,7 @@ class FontSizes:
 class Colors:
   WHITE = rl.WHITE
   WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
-  GHOST_WHEEL = rl.Color(70, 220, 255, 56)
+  GHOST_WHEEL = rl.Color(70, 220, 255, 160)
 
 
 FONT_SIZES = FontSizes()
@@ -234,7 +235,11 @@ class HudRenderer(Widget):
       desired_rotation = -ui_state.sm['carControl'].actuators.steeringAngleDeg
       ghost_color = rl.Color(COLORS.GHOST_WHEEL.r, COLORS.GHOST_WHEEL.g, COLORS.GHOST_WHEEL.b,
                              int(COLORS.GHOST_WHEEL.a * ghost_alpha))
-      rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, desired_rotation, ghost_color)
+      ghost_width = wheel_txt.width * GHOST_WHEEL_SCALE
+      ghost_height = wheel_txt.height * GHOST_WHEEL_SCALE
+      ghost_dest_rect = rl.Rectangle(pos_x, pos_y, ghost_width, ghost_height)
+      ghost_origin = (ghost_width / 2, ghost_height / 2)
+      rl.draw_texture_pro(wheel_txt, src_rect, ghost_dest_rect, ghost_origin, desired_rotation, ghost_color)
 
     # color and draw
     color = rl.Color(255, 255, 255, int(self._wheel_alpha_filter.x))
