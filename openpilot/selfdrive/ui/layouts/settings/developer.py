@@ -97,6 +97,13 @@ class DeveloperLayout(Widget):
       callback=self._on_enable_ghost_wheel,
     )
 
+    self._driving_intent_toggle = toggle_item(
+      "Intent HUD",
+      description="Shows future poses, planned stops, controlling leads, and lane-change targets.",
+      initial_state=self._params.get_bool("DrivingIntentEnabled"),
+      callback=self._on_enable_driving_intent,
+    )
+
     self._scroller = Scroller([
       self._adb_toggle,
       self._ssh_toggle,
@@ -107,6 +114,7 @@ class DeveloperLayout(Widget):
       self._alpha_long_toggle,
       self._ui_debug_toggle,
       self._ghost_wheel_toggle,
+      self._driving_intent_toggle,
     ], line_separator=True, spacing=0)
 
     # Toggles should be not available to change in onroad state
@@ -126,7 +134,7 @@ class DeveloperLayout(Widget):
     # Hide non-release toggles on release builds
     # TODO: we can do an onroad cycle, but alpha long toggle requires a deinit function to re-enable radar and not fault
     for item in (self._joystick_toggle, self._long_maneuver_toggle, self._lat_maneuver_toggle,
-                 self._alpha_long_toggle, self._ghost_wheel_toggle):
+                 self._alpha_long_toggle, self._ghost_wheel_toggle, self._driving_intent_toggle):
       item.set_visible(not self._is_release)
 
     # CP gating
@@ -157,6 +165,7 @@ class DeveloperLayout(Widget):
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
       ("ShowDebugInfo", self._ui_debug_toggle),
       ("GhostWheelEnabled", self._ghost_wheel_toggle),
+      ("DrivingIntentEnabled", self._driving_intent_toggle),
     ):
       item.action_item.set_state(self._params.get_bool(key))
 
@@ -168,6 +177,10 @@ class DeveloperLayout(Widget):
   def _on_enable_ghost_wheel(self, state: bool):
     self._params.put_bool("GhostWheelEnabled", state, block=True)
     ui_state.ghost_wheel_enabled = state
+
+  def _on_enable_driving_intent(self, state: bool):
+    self._params.put_bool("DrivingIntentEnabled", state, block=True)
+    ui_state.driving_intent_enabled = state
 
   def _on_enable_adb(self, state: bool):
     self._params.put_bool("AdbEnabled", state, block=True)

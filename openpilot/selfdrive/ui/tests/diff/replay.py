@@ -35,6 +35,7 @@ def setup_state():
   params.put("GitBranch", "test-branch", block=True)
   params.put("GitCommit", "abc12340ff9131237ba23a1d0fbd8edf9c80e87", block=True)
   params.put("GitCommitDate", "'1732924800 2024-11-30 00:00:00 +0000'", block=True)
+  params.put_bool("DrivingIntentEnabled", True, block=True)
   params.put_bool("GhostWheelEnabled", True, block=True)
 
   # Patch Api.get_token to return a static token so the pairing QR code is deterministic across runs

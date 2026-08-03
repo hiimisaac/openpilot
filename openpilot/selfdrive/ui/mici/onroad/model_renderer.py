@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
+from openpilot.selfdrive.ui.onroad.intent_overlay import IntentOverlay
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.mici.onroad import blend_colors
 from openpilot.system.ui.lib.application import gui_app
@@ -60,6 +61,7 @@ class ModelRenderer(Widget):
     self._road_edge_stds = np.zeros(2, dtype=np.float32)
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
     self._path_offset_z = HEIGHT_INIT[0]
+    self._intent_overlay = IntentOverlay(compact=True)
 
     # Initialize ModelPoints objects
     self._path = ModelPoints()
@@ -92,6 +94,7 @@ class ModelRenderer(Widget):
 
   def set_transform(self, transform: np.ndarray):
     self._car_space_transform = transform.astype(np.float32)
+    self._intent_overlay.set_transform(transform)
     self._transform_dirty = True
 
   def _render(self, rect: rl.Rectangle):
@@ -142,6 +145,14 @@ class ModelRenderer(Widget):
     if ui_state.status != UIStatus.DISENGAGED:
       self._draw_lane_lines()
       self._draw_path(sm)
+
+      self._intent_overlay.render_intent(
+        rect,
+        sm,
+        enabled=ui_state.driving_intent_enabled,
+        longitudinal_control=self._longitudinal_control,
+        path_offset_z=self._path_offset_z,
+      )
 
     # if render_lead_indicator and radar_state:
     #   self._draw_lead_indicator()

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
+from openpilot.selfdrive.ui.onroad.intent_overlay import IntentOverlay
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
@@ -53,6 +54,7 @@ class ModelRenderer(Widget):
     self._road_edge_stds = np.zeros(2, dtype=np.float32)
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
     self._path_offset_z = HEIGHT_INIT[0]
+    self._intent_overlay = IntentOverlay(compact=False)
 
     # Initialize ModelPoints objects
     self._path = ModelPoints()
@@ -79,6 +81,7 @@ class ModelRenderer(Widget):
 
   def set_transform(self, transform: np.ndarray):
     self._car_space_transform = transform.astype(np.float32)
+    self._intent_overlay.set_transform(transform)
     self._transform_dirty = True
 
   def _render(self, rect: rl.Rectangle):
@@ -129,6 +132,14 @@ class ModelRenderer(Widget):
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
+
+    self._intent_overlay.render_intent(
+      rect,
+      sm,
+      enabled=ui_state.driving_intent_enabled,
+      longitudinal_control=self._longitudinal_control,
+      path_offset_z=self._path_offset_z,
+    )
 
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""

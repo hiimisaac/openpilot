@@ -76,6 +76,7 @@ class UIState:
     self.is_release = self.params.get_bool("IsReleaseBranch")
     self.always_on_dm: bool = self.params.get_bool("AlwaysOnDM")
     self.experimental_mode: bool = self.params.get_bool("ExperimentalMode")
+    self.driving_intent_enabled: bool = self.params.get_bool("DrivingIntentEnabled")
     self.ghost_wheel_enabled: bool = self.params.get_bool("GhostWheelEnabled")
     self.usbgpu: bool = False
     self.usbgpu_compiled: bool = usbgpu_compiled()
@@ -205,6 +206,7 @@ class UIState:
     self.is_metric = self.params.get_bool("IsMetric")
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
+    self.driving_intent_enabled = self.params.get_bool("DrivingIntentEnabled")
     self.ghost_wheel_enabled = self.params.get_bool("GhostWheelEnabled")
     self.usbgpu = self.sm["deviceState"].chestnutPresent
     if not self.usbgpu_compiled:
