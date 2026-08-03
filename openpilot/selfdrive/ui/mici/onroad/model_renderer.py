@@ -144,7 +144,8 @@ class ModelRenderer(Widget):
     # Draw elements (hide when disengaged)
     if ui_state.status != UIStatus.DISENGAGED:
       self._draw_lane_lines()
-      self._draw_path(sm)
+      if not (ui_state.driving_intent_enabled and sm['carControl'].latActive):
+        self._draw_path(sm)
 
       self._intent_overlay.render_intent(
         rect,

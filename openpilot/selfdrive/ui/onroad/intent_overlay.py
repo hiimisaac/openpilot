@@ -8,7 +8,7 @@ import pyray as rl
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.system.ui.lib.shader_polygon import draw_polygon
+from openpilot.system.ui.lib.shader_polygon import Gradient, draw_polygon
 from openpilot.system.ui.widgets import Widget
 
 
@@ -17,7 +17,11 @@ MIN_STOP_DISTANCE = 1.5
 MAX_DRAW_DISTANCE = 100.0
 LANE_PROB_THRESHOLD = 0.25
 INTENT_CYAN = rl.Color(70, 220, 255, 255)
+TRAJECTORY_TEAL = rl.Color(52, 232, 190, 255)
 BLOCKED_RED = rl.Color(255, 75, 85, 255)
+GEOMETRY_SMOOTHING_RC = 0.10
+CHEVRON_SPACING = 9.0
+CHEVRON_SPEED = 4.0
 
 
 class StopKind(StrEnum):
@@ -67,7 +71,7 @@ def _enum_name(value) -> str:
 
 
 def _control_stop_distance(plan) -> float | None:
-  if not plan.shouldStop or _enum_name(plan.longitudinalPlanSource) == 'e2e':
+  if _enum_name(plan.longitudinalPlanSource) == 'e2e':
     return None
 
   speeds = np.asarray(plan.speeds, dtype=np.float64)
@@ -217,6 +221,10 @@ class IntentOverlay(Widget):
     self._compact = compact
     self._car_space_transform = np.zeros((3, 3), dtype=np.float64)
     self._alpha_filter = FirstOrderFilter(0.0, 0.15, 1 / gui_app.target_fps)
+    self._geometry_alpha = (1 / gui_app.target_fps) / (GEOMETRY_SMOOTHING_RC + 1 / gui_app.target_fps)
+    self._smoothed_path: np.ndarray | None = None
+    self._smoothed_lanes: np.ndarray | None = None
+    self._smoothed_leads: list[np.ndarray | None] = [None, None]
     self._sm = None
     self._intent_enabled = False
     self._longitudinal_control = False
@@ -249,28 +257,60 @@ class IntentOverlay(Widget):
     return x, y
 
   @staticmethod
-  def _path_sample(model, distance: float) -> tuple[float, float, float, float] | None:
-    x = np.asarray(model.position.x, dtype=np.float64)
-    y = np.asarray(model.position.y, dtype=np.float64)
-    z = np.asarray(model.position.z, dtype=np.float64)
-    if len(x) < 2 or len(x) != len(y) or len(x) != len(z):
+  def _model_path(model) -> np.ndarray | None:
+    path = np.asarray([model.position.x, model.position.y, model.position.z], dtype=np.float64).T
+    if path.ndim != 2 or path.shape[0] < 2 or path.shape[1] != 3:
       return None
-    if not all(np.all(np.isfinite(a)) for a in (x, y, z)) or np.any(np.diff(x) <= 0.0):
+    if not np.all(np.isfinite(path)) or np.any(np.diff(path[:, 0]) <= 0.0):
       return None
-    path = np.column_stack((x, y, z))
+    return path
+
+  @staticmethod
+  def _model_lanes(model) -> np.ndarray | None:
+    if len(model.laneLines) != 4:
+      return None
+    lanes = []
+    for line in model.laneLines:
+      lane = np.asarray([line.x, line.y, line.z], dtype=np.float64).T
+      if lane.ndim != 2 or lane.shape[0] < 2 or lane.shape[1] != 3 or not np.all(np.isfinite(lane)):
+        return None
+      lanes.append(lane)
+    if len({lane.shape for lane in lanes}) != 1:
+      return None
+    return np.asarray(lanes)
+
+  def _smooth_geometry(self, current: np.ndarray | None, target: np.ndarray | None) -> np.ndarray | None:
+    if target is None:
+      return None
+    if current is None or current.shape != target.shape:
+      return target.copy()
+    return current + self._geometry_alpha * (target - current)
+
+  def _update_geometry(self, model) -> tuple[np.ndarray | None, np.ndarray | None]:
+    self._smoothed_path = self._smooth_geometry(self._smoothed_path, self._model_path(model))
+    self._smoothed_lanes = self._smooth_geometry(self._smoothed_lanes, self._model_lanes(model))
+    return self._smoothed_path, self._smoothed_lanes
+
+  @staticmethod
+  def _sample_path(path: np.ndarray, distance: float) -> tuple[float, float, float, float] | None:
     segment_lengths = np.linalg.norm(np.diff(path, axis=0), axis=1)
     arc_distance = np.concatenate(([0.0], np.cumsum(segment_lengths)))
     if np.any(segment_lengths <= 1e-6) or not 0.0 <= distance <= arc_distance[-1]:
       return None
 
-    idx = int(np.clip(np.searchsorted(arc_distance, distance), 1, len(x) - 1))
-    yaw = math.atan2(y[idx] - y[idx - 1], x[idx] - x[idx - 1])
+    idx = int(np.clip(np.searchsorted(arc_distance, distance), 1, len(path) - 1))
+    yaw = math.atan2(path[idx, 1] - path[idx - 1, 1], path[idx, 0] - path[idx - 1, 0])
     return (
-      float(np.interp(distance, arc_distance, x)),
-      float(np.interp(distance, arc_distance, y)),
-      float(np.interp(distance, arc_distance, z)),
+      float(np.interp(distance, arc_distance, path[:, 0])),
+      float(np.interp(distance, arc_distance, path[:, 1])),
+      float(np.interp(distance, arc_distance, path[:, 2])),
       yaw,
     )
+
+  @classmethod
+  def _path_sample(cls, model, distance: float) -> tuple[float, float, float, float] | None:
+    path = cls._model_path(model)
+    return None if path is None else cls._sample_path(path, distance)
 
   @staticmethod
   def _path_height(model, forward_distance: float) -> float:
@@ -280,23 +320,98 @@ class IntentOverlay(Widget):
       return 0.0
     return float(np.interp(forward_distance, x, z))
 
-  def _draw_lane_target(self, rect: rl.Rectangle, model, lane_change: LaneChangeIntent, alpha: float) -> None:
-    first_idx, second_idx = lane_change.boundary_indices
-    if len(model.laneLines) <= second_idx or len(model.laneLineProbs) <= second_idx:
+  def _project_ribbon(self, rect: rl.Rectangle, path: np.ndarray, half_width: float,
+                      path_offset_z: float) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    draw_path = path[(path[:, 0] >= 1.0) & (path[:, 0] <= MAX_DRAW_DISTANCE)]
+    if len(draw_path) < 2:
+      return [], []
+
+    yaw = np.arctan2(np.gradient(draw_path[:, 1]), np.gradient(draw_path[:, 0]))
+    normals = np.column_stack((-np.sin(yaw), np.cos(yaw))) * half_width
+    left_car = draw_path.copy()
+    right_car = draw_path.copy()
+    left_car[:, :2] += normals
+    right_car[:, :2] -= normals
+    left_car[:, 2] += path_offset_z
+    right_car[:, 2] += path_offset_z
+
+    left: list[tuple[float, float]] = []
+    right: list[tuple[float, float]] = []
+    for left_point, right_point in zip(left_car, right_car, strict=True):
+      left_projected = self._project(rect, tuple(left_point))
+      right_projected = self._project(rect, tuple(right_point))
+      if left_projected is not None and right_projected is not None:
+        left.append(left_projected)
+        right.append(right_projected)
+    return left, right
+
+  def _draw_trajectory(self, rect: rl.Rectangle, path: np.ndarray, path_offset_z: float, alpha: float) -> None:
+    half_width = 1.38 if self._compact else 1.62
+    left, right = self._project_ribbon(rect, path, half_width, path_offset_z)
+    if len(left) < 2:
       return
-    if min(model.laneLineProbs[first_idx], model.laneLineProbs[second_idx]) < LANE_PROB_THRESHOLD:
+
+    polygon = np.asarray(left + list(reversed(right)), dtype=np.float32)
+    gradient = Gradient(
+      start=(0.0, 1.0),
+      end=(0.0, 0.0),
+      colors=[
+        self._color(TRAJECTORY_TEAL, 76 * alpha),
+        self._color(TRAJECTORY_TEAL, 48 * alpha),
+        self._color(INTENT_CYAN, 8 * alpha),
+      ],
+      stops=[0.0, 0.58, 1.0],
+    )
+    draw_polygon(rect, polygon, gradient=gradient)
+
+    rail_width = 1.5 if self._compact else 4.0
+    rail_color = self._color(TRAJECTORY_TEAL, 132 * alpha)
+    for boundary in (left, right):
+      for start, end in zip(boundary[:-1], boundary[1:], strict=True):
+        rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), rail_width, rail_color)
+
+  def _draw_motion_chevrons(self, rect: rl.Rectangle, path: np.ndarray,
+                            path_offset_z: float, alpha: float) -> None:
+    total_distance = float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
+    spacing = 7.0 if self._compact else CHEVRON_SPACING
+    speed = 3.0 if self._compact else CHEVRON_SPEED
+    phase = (rl.get_time() * speed) % spacing
+    max_distance = min(total_distance, 60.0)
+    for distance in np.arange(6.0 + phase, max_distance, spacing):
+      sample = self._sample_path(path, float(distance))
+      if sample is None:
+        continue
+      x, y, z, yaw = sample
+      tangent = np.asarray((math.cos(yaw), math.sin(yaw)))
+      normal = np.asarray((-math.sin(yaw), math.cos(yaw)))
+      center = np.asarray((x, y))
+      tip = center + tangent * 0.95
+      rear = center - tangent * 0.58
+      outer_left = rear + normal * 0.68
+      inner_left = rear + normal * 0.27
+      outer_right = rear - normal * 0.68
+      inner_right = rear - normal * 0.27
+      car_triangles = ((tip, outer_left, inner_left), (tip, inner_right, outer_right))
+
+      opacity = float(np.interp(distance, [6.0, 60.0], [220.0, 90.0]) * alpha)
+      for car_triangle in car_triangles:
+        triangle = [self._project(rect, (float(point[0]), float(point[1]), z + path_offset_z)) for point in car_triangle]
+        if any(point is None for point in triangle):
+          continue
+        projected = [point for point in triangle if point is not None]
+        rl.draw_triangle_fan(projected, len(projected), self._color(TRAJECTORY_TEAL, opacity))
+
+  def _draw_lane_target(self, rect: rl.Rectangle, lanes: np.ndarray, lane_probs,
+                        lane_change: LaneChangeIntent, alpha: float) -> None:
+    first_idx, second_idx = lane_change.boundary_indices
+    if len(lanes) <= second_idx or len(lane_probs) <= second_idx:
+      return
+    if min(lane_probs[first_idx], lane_probs[second_idx]) < LANE_PROB_THRESHOLD:
       return
 
     boundary_data = []
     for line_idx in lane_change.boundary_indices:
-      line = model.laneLines[line_idx]
-      x = np.asarray(line.x, dtype=np.float64)
-      y = np.asarray(line.y, dtype=np.float64)
-      z = np.asarray(line.z, dtype=np.float64)
-      if len(x) < 2 or len(x) != len(y) or len(x) != len(z):
-        return
-      if not all(np.all(np.isfinite(a)) for a in (x, y, z)):
-        return
+      x, y, z = lanes[line_idx].T
       boundary_data.append((x, y, z))
 
     if len(boundary_data[0][0]) != len(boundary_data[1][0]):
@@ -326,11 +441,19 @@ class IntentOverlay(Widget):
     }[lane_change.phase]
     if lane_change.blocked:
       phase_alpha = 48
-    draw_polygon(rect, polygon, self._color(color, phase_alpha * alpha))
+    gradient = Gradient(
+      start=(0.0, 1.0),
+      end=(0.0, 0.0),
+      colors=[self._color(color, phase_alpha * alpha), self._color(color, phase_alpha * 0.55 * alpha), self._color(color, 0)],
+      stops=[0.0, 0.62, 1.0],
+    )
+    draw_polygon(rect, polygon, gradient=gradient)
 
     outer_boundary = first if lane_change.direction == 'left' else second
-    line_width = 2.0 if self._compact else 5.0
+    glow_width = 4.0 if self._compact else 12.0
+    line_width = 1.5 if self._compact else 4.0
     for start, end in zip(outer_boundary[:-1], outer_boundary[1:], strict=True):
+      rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), glow_width, self._color(color, 28 * alpha))
       rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), line_width, self._color(color, 205 * alpha))
 
     if lane_change.blocked:
@@ -343,31 +466,9 @@ class IntentOverlay(Widget):
       rl.draw_line_ex(rl.Vector2(center[0] - size, center[1] + size),
                       rl.Vector2(center[0] + size, center[1] - size), width, self._color(color, 230 * alpha))
 
-  def _draw_future_poses(self, rect: rl.Rectangle, poses: tuple[FuturePose, ...], path_offset_z: float, alpha: float) -> None:
-    previous_center = None
-    for i, pose in enumerate(poses):
-      lateral_x = -math.sin(pose.yaw) * 0.65
-      lateral_y = math.cos(pose.yaw) * 0.65
-      z = pose.z + path_offset_z
-      left = self._project(rect, (pose.x + lateral_x, pose.y + lateral_y, z))
-      right = self._project(rect, (pose.x - lateral_x, pose.y - lateral_y, z))
-      center = self._project(rect, (pose.x, pose.y, z))
-      if left is None or right is None or center is None:
-        continue
-      if self._compact and previous_center is not None and np.linalg.norm(np.subtract(center, previous_center)) < 12.0:
-        continue
-
-      opacity = (220, 175, 135)[min(i, 2)] * alpha
-      glow_width = 3.0 if self._compact else 10.0
-      core_width = 1.5 if self._compact else 4.0
-      rl.draw_line_ex(rl.Vector2(*left), rl.Vector2(*right), glow_width, self._color(INTENT_CYAN, opacity * 0.22))
-      rl.draw_line_ex(rl.Vector2(*left), rl.Vector2(*right), core_width, self._color(INTENT_CYAN, opacity))
-      radius = 2.0 if self._compact else 6.0
-      rl.draw_circle(int(center[0]), int(center[1]), radius, self._color(INTENT_CYAN, opacity))
-      previous_center = center
-
-  def _draw_stop(self, rect: rl.Rectangle, model, stop: StopIntent, path_offset_z: float, alpha: float) -> None:
-    sample = self._path_sample(model, stop.distance)
+  def _draw_stop(self, rect: rl.Rectangle, path: np.ndarray, stop: StopIntent,
+                 path_offset_z: float, alpha: float) -> None:
+    sample = self._sample_path(path, stop.distance)
     if sample is None:
       return
     x, y, z, yaw = sample
@@ -375,7 +476,8 @@ class IntentOverlay(Widget):
     lateral_y = math.cos(yaw) * 1.1
     forward_x = math.cos(yaw) * 0.3
     forward_y = math.sin(yaw) * 0.3
-    color = INTENT_CYAN
+    color = TRAJECTORY_TEAL
+    pulse = 0.88 + 0.12 * math.sin(rl.get_time() * math.tau * 0.7)
     glow_width = 5.0 if self._compact else 18.0
     core_width = 2.0 if self._compact else 7.0
     offsets = (0.0, 0.3) if stop.kind == StopKind.CONTROL else (0.0,)
@@ -387,13 +489,15 @@ class IntentOverlay(Widget):
       right = self._project(rect, (x + offset_x - lateral_x, y + offset_y - lateral_y, z + path_offset_z))
       if left is None or right is None:
         continue
-      rl.draw_line_ex(rl.Vector2(*left), rl.Vector2(*right), glow_width, self._color(color, 45 * alpha))
-      rl.draw_line_ex(rl.Vector2(*left), rl.Vector2(*right), core_width, self._color(color, core_alpha * alpha))
+      rl.draw_line_ex(rl.Vector2(*left), rl.Vector2(*right), glow_width, self._color(color, 45 * alpha * pulse))
+      rl.draw_line_ex(rl.Vector2(*left), rl.Vector2(*right), core_width, self._color(color, core_alpha * alpha * pulse))
 
   def _draw_controlling_lead(self, rect: rl.Rectangle, model, radar_state, lead_index: int,
                              path_offset_z: float, alpha: float) -> None:
     leads = (radar_state.leadOne, radar_state.leadTwo)
     if lead_index >= len(leads) or not leads[lead_index].present:
+      if lead_index < len(self._smoothed_leads):
+        self._smoothed_leads[lead_index] = None
       return
     lead = leads[lead_index]
     z = self._path_height(model, float(lead.dRel))
@@ -401,22 +505,31 @@ class IntentOverlay(Widget):
     if point is None:
       return
 
-    scale = 1.0 if self._compact else 2.35
-    size = float(np.clip((25.0 * 30.0) / (lead.dRel / 3.0 + 30.0), 15.0, 30.0) * scale)
-    x, y = point
-    outline = (
-      (x + size * 1.45, y + size * 1.08),
-      (x, y - size * 0.12),
-      (x - size * 1.45, y + size * 1.08),
-    )
-    width = 2.0 if self._compact else 6.0
-    for start, end in zip(outline, (*outline[1:], outline[0]), strict=True):
-      rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width, self._color(INTENT_CYAN, 225 * alpha))
+    target = np.asarray(point)
+    smoothed = self._smoothed_leads[lead_index]
+    if smoothed is None or np.linalg.norm(target - smoothed) > rect.width * 0.35:
+      smoothed = target.copy()
+    else:
+      smoothed += self._geometry_alpha * (target - smoothed)
+    self._smoothed_leads[lead_index] = smoothed
 
-    if self._compact:
-      chevron = [(x + size * 1.15, y + size), (x, y), (x - size * 1.15, y + size)]
-      fill_alpha = int(np.clip(255.0 * (1.0 - lead.dRel / 40.0) + max(-lead.vRel, 0.0) * 25.5, 0.0, 255.0))
-      rl.draw_triangle_fan(chevron, len(chevron), rl.Color(201, 34, 49, int(fill_alpha * alpha)))
+    scale = 1.0 if self._compact else 2.15
+    size = float(np.clip((25.0 * 30.0) / (lead.dRel / 3.0 + 30.0), 15.0, 30.0) * scale)
+    x, y = smoothed
+    left, right = x - size * 1.15, x + size * 1.15
+    top, bottom = y - size * 0.55, y + size * 1.05
+    corner = size * 0.42
+    segments = (
+      ((left, top + corner), (left, top)), ((left, top), (left + corner, top)),
+      ((right - corner, top), (right, top)), ((right, top), (right, top + corner)),
+      ((left, bottom - corner), (left, bottom)), ((left, bottom), (left + corner, bottom)),
+      ((right - corner, bottom), (right, bottom)), ((right, bottom), (right, bottom - corner)),
+    )
+    glow_width = 5.0 if self._compact else 15.0
+    core_width = 1.8 if self._compact else 5.0
+    for start, end in segments:
+      rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), glow_width, self._color(TRAJECTORY_TEAL, 30 * alpha))
+      rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), core_width, self._color(TRAJECTORY_TEAL, 225 * alpha))
 
   def render_intent(self, rect: rl.Rectangle, sm, *, enabled: bool, longitudinal_control: bool,
                     path_offset_z: float) -> IntentState | None:
@@ -433,6 +546,9 @@ class IntentOverlay(Widget):
     required = ('modelV2', 'carState', 'carControl')
     if not all(self._message_valid(sm, service) for service in required):
       self._alpha_filter.x = 0.0
+      self._smoothed_path = None
+      self._smoothed_lanes = None
+      self._smoothed_leads = [None, None]
       return
 
     car_control = sm['carControl']
@@ -445,13 +561,16 @@ class IntentOverlay(Widget):
     plan_valid = self._message_valid(sm, 'longitudinalPlan')
     plan = sm['longitudinalPlan'] if plan_valid else None
     state = derive_intent_state(model, plan, sm['carState'])
+    path, lanes = self._update_geometry(model)
 
-    if car_control.latActive and state.lane_change is not None:
-      self._draw_lane_target(rect, model, state.lane_change, alpha)
-    if car_control.latActive:
-      self._draw_future_poses(rect, state.future_poses, self._path_offset_z, alpha)
-    if self._longitudinal_control and car_control.longActive and state.stop is not None:
-      self._draw_stop(rect, model, state.stop, self._path_offset_z, alpha)
+    if car_control.latActive and path is not None:
+      self._draw_trajectory(rect, path, self._path_offset_z, alpha)
+    if car_control.latActive and lanes is not None and state.lane_change is not None:
+      self._draw_lane_target(rect, lanes, model.laneLineProbs, state.lane_change, alpha)
+    if car_control.latActive and path is not None:
+      self._draw_motion_chevrons(rect, path, self._path_offset_z, alpha)
+    if self._longitudinal_control and car_control.longActive and state.stop is not None and path is not None:
+      self._draw_stop(rect, path, state.stop, self._path_offset_z, alpha)
     if (self._longitudinal_control and car_control.longActive and state.controlling_lead_index is not None and
         self._message_valid(sm, 'radarState')):
       self._draw_controlling_lead(rect, model, sm['radarState'], state.controlling_lead_index, self._path_offset_z, alpha)

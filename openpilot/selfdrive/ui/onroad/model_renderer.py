@@ -128,9 +128,10 @@ class ModelRenderer(Widget):
 
     # Draw elements
     self._draw_lane_lines()
-    self._draw_path(sm)
+    if not (ui_state.driving_intent_enabled and sm['carControl'].latActive):
+      self._draw_path(sm)
 
-    if render_lead_indicator and radar_state:
+    if render_lead_indicator and radar_state and not (ui_state.driving_intent_enabled and sm['carControl'].longActive):
       self._draw_lead_indicator()
 
     self._intent_overlay.render_intent(

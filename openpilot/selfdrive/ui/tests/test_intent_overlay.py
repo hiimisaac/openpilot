@@ -1,5 +1,8 @@
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
+
+os.environ.setdefault("SCALE", "1")
 
 import numpy as np
 import pyray as rl
@@ -72,7 +75,7 @@ def renderer_submaster():
 def test_control_plan_stop_uses_published_speed_horizon():
   speeds = np.linspace(5.1, 0.3, 17)
   plan = message(
-    shouldStop=True,
+    shouldStop=False,
     longitudinalPlanSource='lead0',
     speeds=speeds,
     aTarget=-1.0,
@@ -242,7 +245,7 @@ def test_compact_renderer_forwards_transform_and_current_intent_state():
   render.assert_called_once_with(rect, sm, enabled=True, longitudinal_control=True, path_offset_z=1.25)
 
 
-def test_overlay_draws_lane_target_future_poses_stop_and_controlling_lead():
+def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
   times = [0.0, 1.0, 2.0, 3.0]
   model = empty_model()
   model.action.shouldStop = False
@@ -281,11 +284,62 @@ def test_overlay_draws_lane_target_future_poses_stop_and_controlling_lead():
   ]))
   with patch.object(intent_overlay, 'draw_polygon') as draw_polygon, \
        patch.object(intent_overlay.rl, 'draw_line_ex') as draw_line, \
-       patch.object(intent_overlay.rl, 'draw_circle') as draw_circle:
+       patch.object(intent_overlay.rl, 'draw_triangle_fan') as draw_chevron, \
+       patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
     state = overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
                                   longitudinal_control=True, path_offset_z=1.0)
 
   assert state is not None
   assert draw_polygon.called
   assert draw_line.call_count >= 10
-  assert draw_circle.call_count == 3
+  assert draw_chevron.call_count >= 2
+
+
+def test_geometry_smoothing_interpolates_without_lagging_first_frame():
+  overlay = IntentOverlay(compact=False)
+  initial = np.zeros((3, 3), dtype=np.float64)
+  target = np.ones((3, 3), dtype=np.float64)
+
+  first = overlay._smooth_geometry(None, initial)
+  second = overlay._smooth_geometry(first, target)
+  third = overlay._smooth_geometry(second, target)
+
+  assert np.array_equal(first, initial)
+  assert np.all((second > initial) & (second < target))
+  assert np.all((third > second) & (third < target))
+
+
+def test_big_overlay_draws_smoothly_animated_path_chevrons():
+  times = [0.0, 1.0, 2.0, 3.0, 4.0]
+  model = empty_model()
+  model.position = message(t=times, x=[1.0, 9.0, 18.0, 28.0, 40.0],
+                           y=[0.0, 0.1, 0.5, 1.1, 1.9], z=[1.0] * 5)
+  model.velocity = message(t=times, x=[10.0, 10.0, 9.0, 8.0, 7.0])
+  model.orientation = message(t=times, z=[0.0, 0.02, 0.05, 0.08, 0.1])
+  sm = FakeSubMaster(
+    modelV2=model,
+    longitudinalPlan=empty_plan(),
+    carState=empty_car_state(),
+    carControl=message(latActive=True, longActive=False),
+  )
+  overlay = IntentOverlay(compact=False)
+  overlay.set_transform(np.array([
+    [200.0, 20.0, 0.0],
+    [100.0, 0.0, -45.0],
+    [1.0, 0.0, 0.0],
+  ]))
+  overlay._alpha_filter.x = 1.0
+
+  frames = []
+  for now in (0.0, 0.25):
+    with patch.object(intent_overlay, 'draw_polygon'), \
+         patch.object(intent_overlay.rl, 'draw_line_ex'), \
+         patch.object(intent_overlay.rl, 'draw_circle'), \
+         patch.object(intent_overlay.rl, 'draw_triangle_fan') as draw_chevron, \
+         patch.object(intent_overlay.rl, 'get_time', return_value=now):
+      overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
+                            longitudinal_control=False, path_offset_z=1.0)
+    frames.append([call.args[0] for call in draw_chevron.call_args_list])
+
+  assert len(frames[0]) >= 6
+  assert frames[0] != frames[1]
