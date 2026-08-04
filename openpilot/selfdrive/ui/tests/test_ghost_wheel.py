@@ -57,6 +57,27 @@ class TestGhostWheel(unittest.TestCase):
     self.assertLess(speed_call.args[2].x, rect.width * 0.1)
     self.assertLess(unit_call.args[2].x, rect.width * 0.1)
     self.assertGreater(unit_call.args[2].y, speed_call.args[2].y)
+    self.assertLess(unit_call.args[3], speed_call.args[3] / 3)
+
+  def test_big_set_speed_is_text_only_without_card(self):
+    renderer = object.__new__(big_hud.HudRenderer)
+    renderer.set_speed = 45.0
+    renderer.is_cruise_set = True
+    renderer._font_semi_bold = object()
+    renderer._font_normal = object()
+
+    with patch.object(big_hud.ui_state, 'is_metric', False), \
+         patch.object(big_hud.ui_state, 'status', UIStatus.ENGAGED), \
+         patch.object(big_hud, 'measure_text_cached', side_effect=(rl.Vector2(70, 34), rl.Vector2(80, 78))), \
+         patch.object(big_hud.rl, 'draw_rectangle_rounded') as draw_card, \
+         patch.object(big_hud.rl, 'draw_rectangle_rounded_lines_ex') as draw_card_border, \
+         patch.object(big_hud.rl, 'draw_text_ex') as draw_text:
+      renderer._draw_set_speed(rl.Rectangle(0, 0, 2160, 1080))
+
+    draw_card.assert_not_called()
+    draw_card_border.assert_not_called()
+    self.assertEqual(draw_text.call_count, 2)
+    self.assertIs(draw_text.call_args_list[-1].args[0], renderer._font_normal)
 
   def test_big_hud_draws_desired_before_actual(self):
     renderer = object.__new__(big_hud.HudRenderer)

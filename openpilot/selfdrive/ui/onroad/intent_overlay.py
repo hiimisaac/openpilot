@@ -34,6 +34,11 @@ SCENE_FAR_LATERAL_SCALE = 0.012
 
 def draw_solid_ribbon(points: list[tuple[float, float]], color: rl.Color) -> None:
   if rl.is_window_ready():
+    if len(points) >= 4:
+      p0, p1, p2 = points[:3]
+      winding = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0])
+      if winding > 0.0 and len(points) % 2 == 0:
+        points = [point for i in range(0, len(points), 2) for point in (points[i + 1], points[i])]
     vertices = [rl.Vector2(*point) for point in points]
     rl.draw_triangle_strip(vertices, len(vertices), color)
 
@@ -230,7 +235,8 @@ class IntentOverlay(Widget):
       SCENE_FAR_LATERAL_SCALE +
       (SCENE_NEAR_LATERAL_SCALE - SCENE_FAR_LATERAL_SCALE) * (1.0 - progress)
     )
-    x = rect.x + rect.width * 0.5 + lateral * lateral_scale
+    # openpilot vehicle coordinates use positive lateral to the left.
+    x = rect.x + rect.width * 0.5 - lateral * lateral_scale
     return float(x), float(y)
 
   @staticmethod
@@ -501,8 +507,56 @@ class IntentOverlay(Widget):
       for start, end in zip(boundary[:-1], boundary[1:], strict=True):
         rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), rail_width, rail_color)
 
-  def _draw_lane_target(self, rect: rl.Rectangle, lanes: np.ndarray, lane_probs,
-                        lane_change: LaneChangeIntent, alpha: float) -> None:
+  @staticmethod
+  def _lane_change_branch(path: np.ndarray, lanes: np.ndarray,
+                          lane_change: LaneChangeIntent) -> np.ndarray | None:
+    first_idx, second_idx = lane_change.boundary_indices
+    target = (lanes[first_idx] + lanes[second_idx]) * 0.5
+    if len(target) < 2 or np.any(np.diff(target[:, 0]) <= 0.0):
+      return None
+
+    branch = path.copy()
+    target_y = np.interp(path[:, 0], target[:, 0], target[:, 1])
+    target_z = np.interp(path[:, 0], target[:, 0], target[:, 2])
+    split_start, merge_distance = {
+      LaneChangePhase.CANDIDATE: (7.0, 55.0),
+      LaneChangePhase.ACTIVE: (3.5, 42.0),
+      LaneChangePhase.FINISHING: (1.0, 28.0),
+    }[lane_change.phase]
+    blend = np.clip((path[:, 0] - split_start) / (merge_distance - split_start), 0.0, 1.0)
+    blend = blend * blend * blend * (blend * (blend * 6.0 - 15.0) + 10.0)
+    branch[:, 1] += blend * (target_y - path[:, 1])
+    branch[:, 2] += blend * (target_z - path[:, 2])
+    return branch
+
+  def _draw_lane_change_indicator(self, rect: rl.Rectangle, path: np.ndarray,
+                                  branch: np.ndarray, path_offset_z: float,
+                                  alpha: float) -> None:
+    marker_distance = 16.0 + (rl.get_time() * 7.0) % 20.0
+    marker = self._sample_path(branch, marker_distance)
+    origin = self._sample_path(path, marker_distance)
+    if marker is None or origin is None:
+      return
+
+    marker_point = self._project(rect, (marker[0], marker[1], marker[2] + path_offset_z))
+    origin_point = self._project(rect, (origin[0], origin[1], origin[2] + path_offset_z))
+    if marker_point is None or origin_point is None:
+      return
+
+    direction = 1.0 if marker_point[0] >= origin_point[0] else -1.0
+    size = 8.0 if self._compact else 22.0
+    width = 2.5 if self._compact else 7.0
+    tip = rl.Vector2(marker_point[0] + direction * size, marker_point[1])
+    upper = rl.Vector2(marker_point[0] - direction * size * 0.55, marker_point[1] - size * 0.7)
+    lower = rl.Vector2(marker_point[0] - direction * size * 0.55, marker_point[1] + size * 0.7)
+    rl.draw_circle(int(marker_point[0]), int(marker_point[1]), size * 1.15,
+                   self._color(TESLA_BLUE, 35 * alpha))
+    color = self._color(PATH_HIGHLIGHT, 245 * alpha)
+    rl.draw_line_ex(upper, tip, width, color)
+    rl.draw_line_ex(lower, tip, width, color)
+
+  def _draw_lane_target(self, rect: rl.Rectangle, path: np.ndarray, lanes: np.ndarray, lane_probs,
+                        lane_change: LaneChangeIntent, path_offset_z: float, alpha: float) -> None:
     first_idx, second_idx = lane_change.boundary_indices
     if len(lanes) <= second_idx or len(lane_probs) <= second_idx:
       return
@@ -535,9 +589,9 @@ class IntentOverlay(Widget):
     polygon = np.asarray(first + list(reversed(second)), dtype=np.float32)
     color = BLOCKED_RED if lane_change.blocked else TESLA_BLUE
     phase_alpha = {
-      LaneChangePhase.CANDIDATE: 28,
-      LaneChangePhase.ACTIVE: 42,
-      LaneChangePhase.FINISHING: 20,
+      LaneChangePhase.CANDIDATE: 7,
+      LaneChangePhase.ACTIVE: 13,
+      LaneChangePhase.FINISHING: 6,
     }[lane_change.phase]
     if lane_change.blocked:
       phase_alpha = 48
@@ -548,6 +602,25 @@ class IntentOverlay(Widget):
       stops=[0.0, 0.62, 1.0],
     )
     draw_polygon(rect, polygon, gradient=gradient)
+
+    branch = self._lane_change_branch(path, lanes, lane_change)
+    if branch is not None:
+      branch_left, branch_right = self._project_ribbon(
+        rect, branch, 0.40 if self._compact else 0.52, path_offset_z,
+      )
+      if len(branch_left) >= 2:
+        branch_strip = [point for pair in zip(branch_right, branch_left, strict=True) for point in pair]
+        branch_alpha = {
+          LaneChangePhase.CANDIDATE: 105,
+          LaneChangePhase.ACTIVE: 178,
+          LaneChangePhase.FINISHING: 138,
+        }[lane_change.phase]
+        if lane_change.blocked:
+          branch_alpha = 82
+        pulse = 0.92 + 0.08 * math.sin(rl.get_time() * math.tau * 0.7)
+        draw_solid_ribbon(branch_strip, self._color(color, branch_alpha * alpha * pulse))
+        if not lane_change.blocked:
+          self._draw_lane_change_indicator(rect, path, branch, path_offset_z, alpha)
 
     outer_boundary = first if lane_change.direction == 'left' else second
     glow_width = 4.0 if self._compact else 12.0
@@ -613,8 +686,10 @@ class IntentOverlay(Widget):
       smoothed += self._geometry_alpha * (target - smoothed)
     self._smoothed_leads[lead_index] = smoothed
 
-    scale = 0.95 if self._compact else 1.9
-    size = float(np.clip((25.0 * 30.0) / (lead.dRel / 3.0 + 30.0), 15.0, 30.0) * scale)
+    # Perspective position already moves the lead down-screen as it approaches;
+    # exponential sizing makes that depth change equally obvious at a glance.
+    far_size, near_size = ((7.0, 50.0) if self._compact else (18.0, 128.0))
+    size = float(far_size + (near_size - far_size) * math.exp(-max(float(lead.dRel), 0.0) / 34.0))
     x, y = smoothed
     top, middle, bottom = y - size * 0.62, y + size * 0.18, y + size * 0.92
     body = (
@@ -690,8 +765,9 @@ class IntentOverlay(Widget):
       self._draw_road_context(rect, lanes, model.laneLineProbs, edges, model.roadEdgeStds, alpha)
     if car_control.latActive and path is not None:
       self._draw_trajectory(rect, path, self._path_offset_z, alpha)
-    if car_control.latActive and lanes is not None and state.lane_change is not None:
-      self._draw_lane_target(rect, lanes, model.laneLineProbs, state.lane_change, alpha)
+    if car_control.latActive and path is not None and lanes is not None and state.lane_change is not None:
+      self._draw_lane_target(rect, path, lanes, model.laneLineProbs, state.lane_change,
+                             self._path_offset_z, alpha)
     if self._longitudinal_control and car_control.longActive and state.stop is not None and path is not None:
       self._draw_stop(rect, path, state.stop, self._path_offset_z, alpha)
     if self._message_valid(sm, 'radarState'):

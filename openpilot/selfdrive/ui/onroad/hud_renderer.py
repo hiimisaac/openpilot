@@ -24,7 +24,6 @@ class UIConfig:
   button_size: int = 192
   set_speed_width_metric: int = 200
   set_speed_width_imperial: int = 172
-  set_speed_height: int = 204
   wheel_icon_size: int = 144
   steering_wheel_size: int = 144
 
@@ -32,9 +31,9 @@ class UIConfig:
 @dataclass(frozen=True)
 class FontSizes:
   current_speed: int = 176
-  speed_unit: int = 66
-  max_speed: int = 40
-  set_speed: int = 90
+  speed_unit: int = 44
+  max_speed: int = 34
+  set_speed: int = 78
   mads: int = 42
 
 
@@ -49,9 +48,7 @@ class Colors:
   ENGAGED_BG = rl.Color(128, 216, 166, 204)
   GREY = rl.Color(166, 166, 166, 255)
   DARK_GREY = rl.Color(114, 114, 114, 255)
-  BLACK_TRANSLUCENT = rl.Color(0, 0, 0, 166)
   WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
-  BORDER_TRANSLUCENT = rl.Color(255, 255, 255, 75)
   HEADER_GRADIENT_START = rl.Color(0, 0, 0, 114)
   HEADER_GRADIENT_END = rl.BLANK
   GHOST_WHEEL = rl.Color(70, 220, 255, 160)
@@ -174,14 +171,10 @@ class HudRenderer(Widget):
     return self._exp_button.is_pressed
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
-    """Draw the MAX speed indicator box."""
+    """Draw a lightweight MAX speed indicator beside current speed."""
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
     x = rect.x + 270 + (UI_CONFIG.set_speed_width_imperial - set_speed_width) // 2
     y = rect.y + 45
-
-    set_speed_rect = rl.Rectangle(x, y, set_speed_width, UI_CONFIG.set_speed_height)
-    rl.draw_rectangle_rounded(set_speed_rect, 0.35, 10, COLORS.BLACK_TRANSLUCENT)
-    rl.draw_rectangle_rounded_lines_ex(set_speed_rect, 0.35, 10, 6, COLORS.BORDER_TRANSLUCENT)
 
     max_color = COLORS.GREY
     set_speed_color = COLORS.DARK_GREY
@@ -206,9 +199,9 @@ class HudRenderer(Widget):
     )
 
     set_speed_text = CRUISE_DISABLED_CHAR if not self.is_cruise_set else str(round(self.set_speed))
-    speed_text_width = measure_text_cached(self._font_bold, set_speed_text, FONT_SIZES.set_speed).x
+    speed_text_width = measure_text_cached(self._font_normal, set_speed_text, FONT_SIZES.set_speed).x
     rl.draw_text_ex(
-      self._font_bold,
+      self._font_normal,
       set_speed_text,
       rl.Vector2(x + (set_speed_width - speed_text_width) / 2, y + 77),
       FONT_SIZES.set_speed,

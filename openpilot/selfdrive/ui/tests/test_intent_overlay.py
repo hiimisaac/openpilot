@@ -11,7 +11,9 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.ui.mici.onroad import model_renderer as mici_model_renderer
 from openpilot.selfdrive.ui.onroad import intent_overlay
 from openpilot.selfdrive.ui.onroad import model_renderer as big_model_renderer
-from openpilot.selfdrive.ui.onroad.intent_overlay import IntentOverlay, LaneChangePhase, StopKind, derive_intent_state
+from openpilot.selfdrive.ui.onroad.intent_overlay import (
+  IntentOverlay, LaneChangeIntent, LaneChangePhase, StopKind, derive_intent_state,
+)
 from openpilot.selfdrive.ui.ui_state import UIStatus
 
 
@@ -241,7 +243,7 @@ def test_world_scene_road_surface_follows_curved_model_path():
   half = len(road) // 2
   near_center_x = (road[0, 0] + road[-1, 0]) * 0.5
   far_center_x = (road[half - 1, 0] + road[half, 0]) * 0.5
-  assert far_center_x > near_center_x + 3.0
+  assert far_center_x < near_center_x - 3.0
 
 
 def test_path_sample_places_travel_distance_along_curved_model_path():
@@ -425,6 +427,66 @@ def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
 
   draw_vehicle.assert_called_once()
   assert draw_vehicle.call_args.args[2].width < 70.0
+
+
+def test_radar_lead_grows_decisively_as_distance_closes():
+  overlay = IntentOverlay(compact=True)
+  overlay._ego_texture = message(width=768, height=768)
+  model = empty_model()
+  model.position = message(x=[1.0, 50.0, 100.0], y=[0.0] * 3, z=[0.0] * 3)
+  rect = rl.Rectangle(0, 0, 400, 220)
+
+  def rendered_width(distance):
+    radar_state = message(
+      leadOne=message(present=True, dRel=distance, yRel=0.0, vRel=-1.0),
+      leadTwo=message(present=False),
+    )
+    overlay._smoothed_leads[0] = None
+    with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle, \
+         patch.object(intent_overlay.rl, 'draw_ellipse'):
+      overlay._draw_lead(rect, model, radar_state, 0, 0.0, 1.0, controlling=True)
+    return draw_vehicle.call_args.args[2].width
+
+  assert rendered_width(8.0) > rendered_width(80.0) * 2.0
+
+
+def test_lane_change_branch_splits_spatially_toward_adjacent_lane():
+  x = np.asarray([1.0, 5.0, 12.0, 25.0, 45.0])
+  path = np.column_stack((x, np.zeros_like(x), np.zeros_like(x)))
+  lanes = np.asarray([
+    np.column_stack((x, np.full_like(x, offset), np.zeros_like(x)))
+    for offset in (5.2, 1.8, -1.8, -5.2)
+  ])
+  lane_change = LaneChangeIntent('left', LaneChangePhase.ACTIVE, (0, 1), False)
+
+  branch = IntentOverlay._lane_change_branch(path, lanes, lane_change)
+
+  assert branch is not None
+  assert np.isclose(branch[0, 1], path[0, 1])
+  assert branch[-1, 1] > 3.0
+
+
+def test_lane_change_draws_blue_branch_and_moving_indicator():
+  x = np.asarray([1.0, 5.0, 12.0, 25.0, 45.0])
+  path = np.column_stack((x, np.zeros_like(x), np.zeros_like(x)))
+  lanes = np.asarray([
+    np.column_stack((x, np.full_like(x, offset), np.zeros_like(x)))
+    for offset in (5.2, 1.8, -1.8, -5.2)
+  ])
+  lane_change = LaneChangeIntent('left', LaneChangePhase.ACTIVE, (0, 1), False)
+  overlay = IntentOverlay(compact=True)
+
+  with patch.object(intent_overlay, 'draw_polygon'), \
+       patch.object(intent_overlay, 'draw_solid_ribbon') as draw_branch, \
+       patch.object(overlay, '_draw_lane_change_indicator') as draw_indicator, \
+       patch.object(intent_overlay.rl, 'draw_line_ex'), \
+       patch.object(intent_overlay.rl, 'get_time', return_value=0.5):
+    overlay._draw_lane_target(rl.Rectangle(0, 0, 400, 220), path, lanes, [0.9] * 4,
+                              lane_change, 0.0, 1.0)
+
+  draw_branch.assert_called_once()
+  assert draw_branch.call_args.args[1].b > draw_branch.call_args.args[1].r
+  draw_indicator.assert_called_once()
 
 
 def test_compact_scene_uses_bold_lane_geometry_and_solid_planned_path():
