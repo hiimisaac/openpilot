@@ -243,7 +243,21 @@ def test_world_scene_road_surface_follows_curved_model_path():
   half = len(road) // 2
   near_center_x = (road[0, 0] + road[-1, 0]) * 0.5
   far_center_x = (road[half - 1, 0] + road[half, 0]) * 0.5
-  assert far_center_x < near_center_x - 3.0
+  # Model lateral is screen-right positive in the UI scene. A path whose
+  # lateral position increases with distance must visibly bend right.
+  assert far_center_x > near_center_x + 3.0
+
+
+def test_world_scene_projects_left_and_right_without_mirroring():
+  overlay = IntentOverlay(compact=True)
+  rect = rl.Rectangle(0, 0, 400, 220)
+
+  left = overlay._project(rect, (20.0, -1.0, 0.0))
+  center = overlay._project(rect, (20.0, 0.0, 0.0))
+  right = overlay._project(rect, (20.0, 1.0, 0.0))
+
+  assert left is not None and center is not None and right is not None
+  assert left[0] < center[0] < right[0]
 
 
 def test_path_sample_places_travel_distance_along_curved_model_path():
@@ -332,12 +346,12 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
   lane_x = [2.0, 8.0, 16.0, 30.0]
   model.laneLines = [
     message(x=lane_x, y=[offset] * 4, z=[1.0] * 4)
-    for offset in (5.2, 1.8, -1.8, -5.2)
+    for offset in (-5.2, -1.8, 1.8, 5.2)
   ]
   model.laneLineProbs = [0.9] * 4
   model.roadEdges = [
     message(x=lane_x, y=[offset] * 4, z=[1.0] * 4)
-    for offset in (6.8, -6.8)
+    for offset in (-6.8, 6.8)
   ]
   model.roadEdgeStds = [0.2, 0.2]
 
@@ -481,7 +495,33 @@ def test_radar_lead_converts_radar_lateral_sign_to_scene_coordinates():
 
   expected_x = overlay._project(rect, (20.0, -1.0, 0.0))[0]
   assert np.isclose(draw_vehicle.call_args.args[2].x, expected_x)
-  assert expected_x > rect.width * 0.5
+  assert expected_x < rect.width * 0.5
+
+
+def test_controlling_radar_lead_visible_body_stays_inside_lane_boundaries():
+  overlay = IntentOverlay(compact=True)
+  overlay._ego_texture = message(width=768, height=768)
+  model = empty_model()
+  x = [1.0, 20.0, 40.0]
+  model.position = message(x=x, y=[0.0] * 3, z=[0.0] * 3)
+  model.laneLines = [
+    message(x=x, y=[offset] * 3, z=[0.0] * 3)
+    for offset in (-5.2, -1.8, 1.8, 5.2)
+  ]
+  model.laneLineProbs = [0.9] * 4
+  radar_state = message(
+    leadOne=message(present=True, dRel=20.0, yRel=-4.0, vRel=-1.0),
+    leadTwo=message(present=False),
+  )
+  rect = rl.Rectangle(0, 0, 400, 220)
+
+  with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle:
+    overlay._draw_lead(rect, model, radar_state, 0, 0.0, 1.0, controlling=True)
+
+  vehicle_rect = draw_vehicle.call_args.args[2]
+  visible_right = vehicle_rect.x + vehicle_rect.width * intent_overlay.VEHICLE_SPRITE_VISIBLE_WIDTH * 0.5
+  lane_right = overlay._project(rect, (20.0, 1.8, 0.0))[0]
+  assert visible_right <= lane_right + 1e-5
 
 
 def test_lane_change_branch_splits_spatially_toward_adjacent_lane():
@@ -489,7 +529,7 @@ def test_lane_change_branch_splits_spatially_toward_adjacent_lane():
   path = np.column_stack((x, np.zeros_like(x), np.zeros_like(x)))
   lanes = np.asarray([
     np.column_stack((x, np.full_like(x, offset), np.zeros_like(x)))
-    for offset in (5.2, 1.8, -1.8, -5.2)
+    for offset in (-5.2, -1.8, 1.8, 5.2)
   ])
   lane_change = LaneChangeIntent('left', LaneChangePhase.ACTIVE, (0, 1), False)
 
@@ -497,7 +537,7 @@ def test_lane_change_branch_splits_spatially_toward_adjacent_lane():
 
   assert branch is not None
   assert np.isclose(branch[0, 1], path[0, 1])
-  assert branch[-1, 1] > 3.0
+  assert branch[-1, 1] < -3.0
 
 
 def test_lane_change_draws_blue_branch_and_moving_indicator():
@@ -505,7 +545,7 @@ def test_lane_change_draws_blue_branch_and_moving_indicator():
   path = np.column_stack((x, np.zeros_like(x), np.zeros_like(x)))
   lanes = np.asarray([
     np.column_stack((x, np.full_like(x, offset), np.zeros_like(x)))
-    for offset in (5.2, 1.8, -1.8, -5.2)
+    for offset in (-5.2, -1.8, 1.8, 5.2)
   ])
   lane_change = LaneChangeIntent('left', LaneChangePhase.ACTIVE, (0, 1), False)
   overlay = IntentOverlay(compact=True)
@@ -532,12 +572,12 @@ def test_compact_scene_uses_bold_lane_geometry_and_solid_planned_path():
   model.orientation = message(t=times, z=[0.0, 0.02, 0.05, 0.08, 0.1])
   model.laneLines = [
     message(x=model.position.x, y=[offset] * 5, z=[1.0] * 5)
-    for offset in (5.2, 1.8, -1.8, -5.2)
+    for offset in (-5.2, -1.8, 1.8, 5.2)
   ]
   model.laneLineProbs = [0.9] * 4
   model.roadEdges = [
     message(x=model.position.x, y=[offset] * 5, z=[1.0] * 5)
-    for offset in (6.8, -6.8)
+    for offset in (-6.8, 6.8)
   ]
   model.roadEdgeStds = [0.2, 0.2]
   sm = FakeSubMaster(
@@ -565,22 +605,17 @@ def test_compact_scene_uses_bold_lane_geometry_and_solid_planned_path():
 
   assert draw_line.call_count <= 32
   draw_path_ribbon.assert_called_once()
-  assert draw_path_ribbon.call_args.args[1].a >= 220
+  assert draw_path_ribbon.call_args.args[1].a >= 200
   lane_alphas = [
     call.args[3].a for call in draw_line.call_args_list
     if call.args[3].r == intent_overlay.ROAD_MARKING.r and call.args[3].g == intent_overlay.ROAD_MARKING.g
-  ]
-  corridor_alphas = [
-    call.args[3].a for call in draw_line.call_args_list
-    if call.args[3].r == intent_overlay.PATH_HIGHLIGHT.r and call.args[3].g == intent_overlay.PATH_HIGHLIGHT.g
   ]
   edge_alphas = [
     call.args[3].a for call in draw_line.call_args_list
     if call.args[3].r == intent_overlay.ROAD_EDGE.r and call.args[3].g == intent_overlay.ROAD_EDGE.g
   ]
-  assert lane_alphas and max(lane_alphas) >= 150
+  assert lane_alphas and max(lane_alphas) >= 130
   assert edge_alphas and max(edge_alphas) >= 80
-  assert corridor_alphas and max(corridor_alphas) >= 220
   draw_scene.assert_called_once()
 
 
@@ -593,7 +628,7 @@ def test_compact_intent_hud_replaces_camera_with_scene_and_anchored_ego():
   model.orientation = message(t=times, z=[0.0, 0.02, 0.05, 0.08, 0.1])
   model.laneLines = [
     message(x=model.position.x, y=[offset] * 5, z=[1.0] * 5)
-    for offset in (5.2, 1.8, -1.8, -5.2)
+    for offset in (-5.2, -1.8, 1.8, 5.2)
   ]
   model.laneLineProbs = [0.9] * 4
   sm = FakeSubMaster(

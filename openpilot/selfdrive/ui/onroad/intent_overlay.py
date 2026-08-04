@@ -16,13 +16,13 @@ STOP_SPEED = 0.3
 MIN_STOP_DISTANCE = 1.5
 MAX_DRAW_DISTANCE = 100.0
 LANE_PROB_THRESHOLD = 0.25
-TESLA_BLUE = rl.Color(52, 132, 255, 255)
-PATH_HIGHLIGHT = rl.Color(116, 190, 255, 255)
-ROAD_MARKING = rl.Color(224, 232, 238, 255)
-ROAD_EDGE = rl.Color(142, 153, 162, 255)
-SCENE_HORIZON = rl.Color(47, 54, 62, 255)
-SCENE_FOREGROUND = rl.Color(12, 16, 21, 255)
-ROAD_SURFACE = rl.Color(55, 61, 68, 255)
+TESLA_BLUE = rl.Color(43, 112, 226, 255)
+PATH_HIGHLIGHT = rl.Color(101, 166, 242, 255)
+ROAD_MARKING = rl.Color(198, 204, 210, 255)
+ROAD_EDGE = rl.Color(108, 117, 126, 255)
+SCENE_HORIZON = rl.Color(42, 47, 53, 255)
+SCENE_FOREGROUND = rl.Color(17, 20, 24, 255)
+ROAD_SURFACE = rl.Color(49, 54, 60, 255)
 UI_BLACK = rl.Color(0, 0, 0, 255)
 UI_WHITE = rl.Color(255, 255, 255, 255)
 BLOCKED_RED = rl.Color(255, 75, 85, 255)
@@ -243,8 +243,8 @@ class IntentOverlay(Widget):
     y = near_y + (horizon_y - near_y) * progress
 
     lateral_scale = self._lateral_scale(rect, forward)
-    # openpilot vehicle coordinates use positive lateral to the left.
-    x = rect.x + rect.width * 0.5 - lateral * lateral_scale
+    # modelV2 lateral position is screen-right positive in this chase view.
+    x = rect.x + rect.width * 0.5 + lateral * lateral_scale
     return float(x), float(y)
 
   @staticmethod
@@ -388,7 +388,7 @@ class IntentOverlay(Widget):
         points = self._project_line(rect, lanes[index])
         primary = index in (1, 2)
         width = (4.0 if primary else 3.0) if self._compact else (14.0 if primary else 9.0)
-        line_alpha = 178 if primary else 112
+        line_alpha = 150 if primary else 82
         for start, end in zip(points[:-1], points[1:], strict=True):
           rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
                           self._color(ROAD_MARKING, line_alpha * confidence * alpha))
@@ -500,13 +500,7 @@ class IntentOverlay(Widget):
       return
 
     strip = [point for pair in zip(right, left, strict=True) for point in pair]
-    draw_solid_ribbon(strip, self._color(TESLA_BLUE, 225 * alpha))
-
-    rail_color = self._color(PATH_HIGHLIGHT, 232 * alpha)
-    rail_width = 1.5 if self._compact else 4.0
-    for boundary in (left, right):
-      for start, end in zip(boundary[:-1], boundary[1:], strict=True):
-        rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), rail_width, rail_color)
+    draw_solid_ribbon(strip, self._color(TESLA_BLUE, 205 * alpha))
 
   @staticmethod
   def _lane_change_branch(path: np.ndarray, lanes: np.ndarray,
@@ -607,19 +601,18 @@ class IntentOverlay(Widget):
     branch = self._lane_change_branch(path, lanes, lane_change)
     if branch is not None:
       branch_left, branch_right = self._project_ribbon(
-        rect, branch, 0.40 if self._compact else 0.52, path_offset_z,
+        rect, branch, 0.26 if self._compact else 0.36, path_offset_z,
       )
       if len(branch_left) >= 2:
         branch_strip = [point for pair in zip(branch_right, branch_left, strict=True) for point in pair]
         branch_alpha = {
-          LaneChangePhase.CANDIDATE: 105,
-          LaneChangePhase.ACTIVE: 178,
-          LaneChangePhase.FINISHING: 138,
+          LaneChangePhase.CANDIDATE: 72,
+          LaneChangePhase.ACTIVE: 140,
+          LaneChangePhase.FINISHING: 100,
         }[lane_change.phase]
         if lane_change.blocked:
           branch_alpha = 82
-        pulse = 0.92 + 0.08 * math.sin(rl.get_time() * math.tau * 0.7)
-        draw_solid_ribbon(branch_strip, self._color(color, branch_alpha * alpha * pulse))
+        draw_solid_ribbon(branch_strip, self._color(color, branch_alpha * alpha))
         if not lane_change.blocked:
           self._draw_lane_change_indicator(rect, path, branch, path_offset_z, alpha)
 
@@ -675,8 +668,22 @@ class IntentOverlay(Widget):
       return
     lead = leads[lead_index]
     z = self._path_height(model, float(lead.dRel))
+    lateral = -float(lead.yRel)
+    if controlling:
+      lanes = self._model_lanes(model)
+      lane_probs = np.asarray(getattr(model, 'laneLineProbs', []), dtype=np.float64)
+      if lanes is not None and len(lanes) == 4 and len(lane_probs) == 4 and min(lane_probs[1:3]) >= LANE_PROB_THRESHOLD:
+        distance = float(lead.dRel)
+        inner_boundaries = [
+          float(np.interp(distance, lanes[index, :, 0], lanes[index, :, 1]))
+          for index in (1, 2)
+        ]
+        lower = min(inner_boundaries) + LEAD_VEHICLE_WIDTH_METERS * 0.5
+        upper = max(inner_boundaries) - LEAD_VEHICLE_WIDTH_METERS * 0.5
+        if lower <= upper:
+          lateral = float(np.clip(lateral, lower, upper))
     # RadarState.yRel uses the opposite lateral sign from model coordinates.
-    point = self._project(rect, (float(lead.dRel), -float(lead.yRel), z + path_offset_z))
+    point = self._project(rect, (float(lead.dRel), lateral, z + path_offset_z))
     if point is None:
       return
 
