@@ -427,6 +427,41 @@ def test_geometry_smoothing_interpolates_without_lagging_first_frame():
   assert np.all((third > second) & (third < target))
 
 
+def test_ego_sprite_turns_with_smoothed_road_wheel_angle():
+  overlay = IntentOverlay(compact=True)
+  overlay._ego_texture = message(width=768, height=768)
+  rect = rl.Rectangle(0, 0, 400, 220)
+  car_state = message(steeringAngleDeg=120.0, leftBlinker=False, rightBlinker=False)
+
+  with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle, \
+       patch.object(intent_overlay.rl, 'draw_ellipse'), \
+       patch.object(intent_overlay.rl, 'draw_circle'), \
+       patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
+    overlay._draw_ego_vehicle(rect, car_state, steer_ratio=15.0, braking=False, alpha=1.0)
+
+  rotation = draw_vehicle.call_args.args[4]
+  assert -8.0 <= rotation < 0.0
+
+
+def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
+  overlay = IntentOverlay(compact=True)
+  overlay._ego_texture = message(width=768, height=768)
+  model = empty_model()
+  model.position = message(x=[1.0, 20.0, 40.0], y=[0.0] * 3, z=[0.0] * 3)
+  radar_state = message(
+    leadOne=message(present=True, dRel=20.0, yRel=0.0, vRel=-1.0),
+    leadTwo=message(present=False),
+  )
+
+  with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle, \
+       patch.object(intent_overlay.rl, 'draw_ellipse'), \
+       patch.object(intent_overlay.rl, 'draw_ellipse_lines'):
+    overlay._draw_lead(rl.Rectangle(0, 0, 400, 220), model, radar_state, 0, 0.0, 1.0, controlling=True)
+
+  draw_vehicle.assert_called_once()
+  assert draw_vehicle.call_args.args[2].width < 70.0
+
+
 def test_compact_scene_keeps_path_bold_without_wireframe_clutter():
   times = [0.0, 1.0, 2.0, 3.0, 4.0]
   model = empty_model()
@@ -530,10 +565,11 @@ def test_compact_intent_hud_replaces_camera_with_scene_and_anchored_ego():
   assert draw_scene.call_args.args[-2].a == 255
   assert draw_scene.call_args.args[-1].a == 255
   load_texture.assert_called_once_with("images/intent_ego_vehicle.png", alpha_premultiply=True)
-  draw_ego.assert_called_once()
-  ego_rect = draw_ego.call_args.args[2]
-  assert np.isclose(ego_rect.x + ego_rect.width * 0.5, rect.x + rect.width * 0.5)
-  assert ego_rect.y + ego_rect.height > rect.y + rect.height * 0.92
+  assert draw_ego.call_count == 4  # three model future poses and the anchored ego
+  ego_rect = draw_ego.call_args_list[-1].args[2]
+  assert np.isclose(ego_rect.x, rect.x + rect.width * 0.5)
+  assert ego_rect.y > rect.y + rect.height * 0.7
+  assert draw_ego.call_args_list[-1].args[4] == 0.0
 
 
 def test_big_overlay_draws_single_smoothly_animated_path_pulse():

@@ -39,6 +39,25 @@ class FakeSubMaster(dict):
 
 
 class TestGhostWheel(unittest.TestCase):
+  def test_big_speed_and_unit_move_as_one_regular_weight_group(self):
+    renderer = object.__new__(big_hud.HudRenderer)
+    renderer.speed = 44.0
+    renderer._font_normal = object()
+    rect = rl.Rectangle(0, 0, 2160, 1080)
+
+    with patch.object(big_hud.ui_state, 'is_metric', False), \
+         patch.object(big_hud, 'measure_text_cached', side_effect=(rl.Vector2(120, 150), rl.Vector2(72, 50))), \
+         patch.object(big_hud.rl, 'draw_text_ex') as draw_text:
+      renderer._draw_current_speed(rect)
+
+    self.assertEqual(draw_text.call_count, 2)
+    speed_call, unit_call = draw_text.call_args_list
+    self.assertIs(speed_call.args[0], renderer._font_normal)
+    self.assertIs(unit_call.args[0], renderer._font_normal)
+    self.assertLess(speed_call.args[2].x, rect.width * 0.1)
+    self.assertLess(unit_call.args[2].x, rect.width * 0.1)
+    self.assertGreater(unit_call.args[2].y, speed_call.args[2].y)
+
   def test_big_hud_draws_desired_before_actual(self):
     renderer = object.__new__(big_hud.HudRenderer)
     renderer._steering_wheel_alpha_filter = PassthroughFilter()

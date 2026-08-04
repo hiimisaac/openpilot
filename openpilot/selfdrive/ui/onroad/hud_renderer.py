@@ -75,6 +75,7 @@ class HudRenderer(Widget):
     self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
     self._font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
     self._font_medium: rl.Font = gui_app.font(FontWeight.MEDIUM)
+    self._font_normal: rl.Font = gui_app.font(FontWeight.NORMAL)
 
     self._exp_button: ExpButton = ExpButton(UI_CONFIG.button_size, UI_CONFIG.wheel_icon_size)
     self._txt_steering_wheel: rl.Texture = gui_app.texture(
@@ -175,7 +176,7 @@ class HudRenderer(Widget):
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
-    x = rect.x + 60 + (UI_CONFIG.set_speed_width_imperial - set_speed_width) // 2
+    x = rect.x + 270 + (UI_CONFIG.set_speed_width_imperial - set_speed_width) // 2
     y = rect.y + 45
 
     set_speed_rect = rl.Rectangle(x, y, set_speed_width, UI_CONFIG.set_speed_height)
@@ -218,21 +219,22 @@ class HudRenderer(Widget):
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
     """Draw the current vehicle speed and unit."""
     speed_text = str(round(self.speed))
-    speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
-    speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
-    rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.WHITE)
+    speed_text_size = measure_text_cached(self._font_normal, speed_text, FONT_SIZES.current_speed)
+    speed_center_x = rect.x + 145
+    speed_pos = rl.Vector2(speed_center_x - speed_text_size.x / 2, rect.y + 48)
+    rl.draw_text_ex(self._font_normal, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.WHITE)
 
     unit_text = tr("km/h") if ui_state.is_metric else tr("mph")
-    unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
-    unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
-    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
+    unit_text_size = measure_text_cached(self._font_normal, unit_text, FONT_SIZES.speed_unit)
+    unit_pos = rl.Vector2(speed_center_x - unit_text_size.x / 2, speed_pos.y + speed_text_size.y - 2)
+    rl.draw_text_ex(self._font_normal, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
 
   def _draw_mads_status(self, rect: rl.Rectangle) -> None:
     if ui_state.CP is None or not is_mads_configured(ui_state.CP):
       return
 
     text = tr("MADS ON") if ui_state.sm["carControl"].latActive else tr("MADS OFF")
-    text_size = measure_text_cached(self._font_semi_bold, text, FONT_SIZES.mads)
+    text_size = measure_text_cached(self._font_normal, text, FONT_SIZES.mads)
     position = rl.Vector2(rect.x + rect.width - text_size.x - UI_CONFIG.border_size,
                           rect.y + UI_CONFIG.header_height + UI_CONFIG.border_size)
-    rl.draw_text_ex(self._font_semi_bold, text, position, FONT_SIZES.mads, 0, COLORS.WHITE)
+    rl.draw_text_ex(self._font_normal, text, position, FONT_SIZES.mads, 0, COLORS.WHITE)

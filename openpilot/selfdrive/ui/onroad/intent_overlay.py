@@ -242,6 +242,7 @@ class IntentOverlay(Widget):
     self._path_offset_z = 0.0
     self._render_state: IntentState | None = None
     self._ego_texture: rl.Texture | None = None
+    self._ego_rotation_filter = FirstOrderFilter(0.0, 0.16, 1 / gui_app.target_fps)
 
   def set_transform(self, _transform: np.ndarray) -> None:
     # Kept for the ModelRenderer interface. The dedicated world scene deliberately
@@ -438,7 +439,12 @@ class IntentOverlay(Widget):
         continue
       footprint = tuple(point for point in projected if point is not None)
       opacity = (78 - index * 17) * alpha
-      rl.draw_triangle_fan(footprint, len(footprint), self._color(TESLA_BLUE, opacity))
+      center = np.mean(footprint, axis=0)
+      base_size = rect.height * (0.14 if self._compact else 0.08)
+      size = float(np.clip(base_size * 30.0 / (pose.x + 18.0), 12.0, base_size))
+      if not self._draw_vehicle_sprite(float(center[0]), float(center[1]), size, math.degrees(pose.yaw),
+                                       self._color(TESLA_BLUE, opacity)):
+        rl.draw_triangle_fan(footprint, len(footprint), self._color(TESLA_BLUE, opacity))
 
   def _draw_blindspot_guard(self, rect: rl.Rectangle, car_state, alpha: float) -> None:
     """Blind-spot messages have no object position, so only mark the affected side."""
@@ -479,10 +485,50 @@ class IntentOverlay(Widget):
     )
     rl.draw_triangle_fan(road, len(road), self._color(ROAD_SURFACE, 238 * alpha))
 
-  def _draw_ego_vehicle(self, rect: rl.Rectangle, alpha: float) -> None:
+  def _ensure_vehicle_texture(self) -> bool:
     if self._ego_texture is None and rl.is_window_ready():
       self._ego_texture = gui_app.texture("images/intent_ego_vehicle.png", alpha_premultiply=True)
-    if self._ego_texture is None:
+    return self._ego_texture is not None
+
+  def _draw_vehicle_sprite(self, center_x: float, center_y: float, size: float,
+                           rotation: float, color: rl.Color) -> bool:
+    if not self._ensure_vehicle_texture():
+      return False
+    assert self._ego_texture is not None
+    source = rl.Rectangle(0, 0, self._ego_texture.width, self._ego_texture.height)
+    dest = rl.Rectangle(center_x, center_y, size, size)
+    origin = rl.Vector2(size * 0.5, size * 0.5)
+    rl.draw_texture_pro(self._ego_texture, source, dest, origin, rotation, color)
+    return True
+
+  @staticmethod
+  def _rotated_offset(center_x: float, center_y: float, offset_x: float,
+                      offset_y: float, rotation: float) -> tuple[float, float]:
+    angle = math.radians(rotation)
+    return (
+      center_x + offset_x * math.cos(angle) - offset_y * math.sin(angle),
+      center_y + offset_x * math.sin(angle) + offset_y * math.cos(angle),
+    )
+
+  def _draw_vehicle_lights(self, center_x: float, center_y: float, size: float, rotation: float,
+                           car_state, braking: bool, alpha: float) -> None:
+    left = self._rotated_offset(center_x, center_y, -size * 0.21, size * 0.18, rotation)
+    right = self._rotated_offset(center_x, center_y, size * 0.21, size * 0.18, rotation)
+    if braking:
+      for point in (left, right):
+        rl.draw_circle(int(point[0]), int(point[1]), size * 0.055, self._color(BLOCKED_RED, 48 * alpha))
+        rl.draw_circle(int(point[0]), int(point[1]), size * 0.025, self._color(BLOCKED_RED, 235 * alpha))
+
+    blink_on = (rl.get_time() % 1.0) < 0.52
+    for enabled, point in ((getattr(car_state, 'leftBlinker', False), left),
+                           (getattr(car_state, 'rightBlinker', False), right)):
+      if enabled and blink_on:
+        amber = rl.Color(255, 177, 48, 255)
+        rl.draw_circle(int(point[0]), int(point[1]), size * 0.045, self._color(amber, 210 * alpha))
+
+  def _draw_ego_vehicle(self, rect: rl.Rectangle, car_state, steer_ratio: float,
+                        braking: bool, alpha: float) -> None:
+    if not self._ensure_vehicle_texture():
       return
 
     size = min(
@@ -491,18 +537,18 @@ class IntentOverlay(Widget):
     )
     center_x = rect.x + rect.width * 0.5
     bottom = rect.y + rect.height
-    dest = rl.Rectangle(center_x - size * 0.5, bottom - size * 0.92, size, size)
-    source = rl.Rectangle(0, 0, self._ego_texture.width, self._ego_texture.height)
+    center_y = bottom - size * 0.42
+    ratio = float(np.clip(steer_ratio, 8.0, 25.0))
+    rotation_target = float(np.clip(-getattr(car_state, 'steeringAngleDeg', 0.0) / ratio, -8.0, 8.0))
+    rotation = self._ego_rotation_filter.update(rotation_target)
 
     rl.draw_ellipse(
       int(center_x), int(bottom - size * 0.075),
       size * 0.31, size * 0.075,
       self._color(UI_BLACK, 112 * alpha),
     )
-    rl.draw_texture_pro(
-      self._ego_texture, source, dest, rl.Vector2(0, 0), 0.0,
-      self._color(UI_WHITE, 255 * alpha),
-    )
+    self._draw_vehicle_sprite(center_x, center_y, size, rotation, self._color(UI_WHITE, 255 * alpha))
+    self._draw_vehicle_lights(center_x, center_y, size, rotation, car_state, braking, alpha)
 
   def _draw_trajectory(self, rect: rl.Rectangle, path: np.ndarray, path_offset_z: float, alpha: float) -> None:
     half_width = 1.38 if self._compact else 1.62
@@ -688,6 +734,13 @@ class IntentOverlay(Widget):
     )
     rl.draw_ellipse(int(x), int(bottom + size * 0.12), size * 0.72, size * 0.23,
                     self._color(UI_BLACK, 82 * alpha))
+    if self._draw_vehicle_sprite(float(x), float(middle), size * 1.55, 0.0,
+                                 self._color(UI_WHITE, (235 if controlling else 165) * alpha)):
+      if controlling:
+        rl.draw_ellipse_lines(int(x), int(middle), size * 0.58, size * 0.72,
+                              self._color(TESLA_BLUE, 205 * alpha))
+      return
+
     body_alpha = 218 if controlling else 150
     rl.draw_triangle_fan(body, len(body), self._color(rl.Color(198, 207, 214, 255), body_alpha * alpha))
     rl.draw_triangle_fan(window, len(window), self._color(rl.Color(48, 62, 74, 255), 224 * alpha))
@@ -788,7 +841,10 @@ class IntentOverlay(Widget):
           self._draw_lead(rect, model, sm['radarState'], lead_index, self._path_offset_z, alpha,
                           controlling=lead_index == controlling_index)
     self._draw_blindspot_guard(rect, sm['carState'], alpha)
-    self._draw_ego_vehicle(rect, alpha)
+    steer_ratio = sm['carParams'].steerRatio if self._message_valid(sm, 'carParams') else 15.0
+    commanded_accel = getattr(getattr(car_control, 'actuators', None), 'accel', 0.0)
+    braking = bool(self._longitudinal_control and car_control.longActive and commanded_accel < -0.12)
+    self._draw_ego_vehicle(rect, sm['carState'], steer_ratio, braking, alpha)
     self._draw_intent_card(
       rect, state, alpha,
       lateral_active=car_control.latActive,
