@@ -375,11 +375,11 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
     speeds=np.linspace(5.1, 0.3, 17),
     aTarget=-1.0,
   )
-  car_state = message(leftBlindspot=False, rightBlindspot=False)
+  car_state = message(leftBlindspot=False, rightBlindspot=True)
   car_control = message(latActive=True, longActive=True)
   radar_state = message(
     leadOne=message(present=True, dRel=12.0, yRel=0.2, vRel=-1.0),
-    leadTwo=message(present=False),
+    leadTwo=message(present=True, dRel=16.0, yRel=-2.4, vRel=0.2),
   )
 
   sm = FakeSubMaster(modelV2=model, longitudinalPlan=plan, carState=car_state,
@@ -409,7 +409,8 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
   assert state is not None
   assert draw_polygon.called
   assert draw_line.call_count >= 10
-  assert draw_vehicle.call_count == 2
+  assert draw_vehicle.call_count == 7  # three future ego footprints plus two lead body/windows
+  assert any(call.args[3].r == intent_overlay.BLOCKED_RED.r for call in draw_line.call_args_list)
 
 
 def test_geometry_smoothing_interpolates_without_lagging_first_frame():
@@ -476,7 +477,12 @@ def test_compact_scene_keeps_path_bold_without_wireframe_clutter():
     call.args[3].a for call in draw_line.call_args_list
     if call.args[3].r == intent_overlay.PATH_HIGHLIGHT.r and call.args[3].g == intent_overlay.PATH_HIGHLIGHT.g
   ]
+  edge_alphas = [
+    call.args[3].a for call in draw_line.call_args_list
+    if call.args[3].r == intent_overlay.ROAD_EDGE.r and call.args[3].g == intent_overlay.ROAD_EDGE.g
+  ]
   assert lane_alphas and max(lane_alphas) <= 64
+  assert edge_alphas and max(edge_alphas) <= 86
   assert corridor_alphas and max(corridor_alphas) >= 180
   draw_scene.assert_called_once()
 
@@ -561,7 +567,7 @@ def test_big_overlay_draws_single_smoothly_animated_path_pulse():
       overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
                             longitudinal_control=False, path_offset_z=1.0)
     frames.append([call.args[1].tolist() for call in draw_polygon.call_args_list[-2:]])
-    assert draw_shape.call_count == 0  # no pose chevrons
+    assert draw_shape.call_count == 3  # future poses are quiet filled footprints, not chevrons
 
   assert len(frames[0]) == 2
   assert frames[0] != frames[1]

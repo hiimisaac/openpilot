@@ -20,6 +20,7 @@ LANE_PROB_THRESHOLD = 0.25
 TESLA_BLUE = rl.Color(52, 132, 255, 255)
 PATH_HIGHLIGHT = rl.Color(116, 190, 255, 255)
 ROAD_MARKING = rl.Color(224, 232, 238, 255)
+ROAD_EDGE = rl.Color(142, 153, 162, 255)
 SCENE_HORIZON = rl.Color(47, 54, 62, 255)
 SCENE_FOREGROUND = rl.Color(12, 16, 21, 255)
 ROAD_SURFACE = rl.Color(55, 61, 68, 255)
@@ -233,6 +234,7 @@ class IntentOverlay(Widget):
     self._geometry_alpha = (1 / gui_app.target_fps) / (GEOMETRY_SMOOTHING_RC + 1 / gui_app.target_fps)
     self._smoothed_path: np.ndarray | None = None
     self._smoothed_lanes: np.ndarray | None = None
+    self._smoothed_edges: np.ndarray | None = None
     self._smoothed_leads: list[np.ndarray | None] = [None, None]
     self._sm = None
     self._intent_enabled = False
@@ -295,6 +297,20 @@ class IntentOverlay(Widget):
       return None
     return np.asarray(lanes)
 
+  @staticmethod
+  def _model_edges(model) -> np.ndarray | None:
+    if len(model.roadEdges) != 2:
+      return None
+    edges = []
+    for line in model.roadEdges:
+      edge = np.asarray([line.x, line.y, line.z], dtype=np.float64).T
+      if edge.ndim != 2 or edge.shape[0] < 2 or edge.shape[1] != 3 or not np.all(np.isfinite(edge)):
+        return None
+      edges.append(edge)
+    if edges[0].shape != edges[1].shape:
+      return None
+    return np.asarray(edges)
+
   def _smooth_geometry(self, current: np.ndarray | None, target: np.ndarray | None) -> np.ndarray | None:
     if target is None:
       return None
@@ -302,10 +318,11 @@ class IntentOverlay(Widget):
       return target.copy()
     return current + self._geometry_alpha * (target - current)
 
-  def _update_geometry(self, model) -> tuple[np.ndarray | None, np.ndarray | None]:
+  def _update_geometry(self, model) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     self._smoothed_path = self._smooth_geometry(self._smoothed_path, self._model_path(model))
     self._smoothed_lanes = self._smooth_geometry(self._smoothed_lanes, self._model_lanes(model))
-    return self._smoothed_path, self._smoothed_lanes
+    self._smoothed_edges = self._smooth_geometry(self._smoothed_edges, self._model_edges(model))
+    return self._smoothed_path, self._smoothed_lanes, self._smoothed_edges
 
   @staticmethod
   def _sample_path(path: np.ndarray, distance: float) -> tuple[float, float, float, float] | None:
@@ -373,20 +390,68 @@ class IntentOverlay(Widget):
         projected.append(screen_point)
     return projected
 
-  def _draw_road_context(self, rect: rl.Rectangle, lanes: np.ndarray | None, lane_probs, alpha: float) -> None:
-    if lanes is None:
-      return
-    for index in (1, 2):
-      if index >= len(lanes) or index >= len(lane_probs):
+  def _draw_road_context(self, rect: rl.Rectangle, lanes: np.ndarray | None, lane_probs,
+                         edges: np.ndarray | None, edge_stds, alpha: float) -> None:
+    if edges is not None:
+      for index, edge in enumerate(edges):
+        if index >= len(edge_stds):
+          continue
+        confidence = float(np.clip(1.0 - edge_stds[index], 0.0, 1.0))
+        if confidence < 0.2:
+          continue
+        points = self._project_line(rect, edge)
+        width = 1.2 if self._compact else 3.0
+        for start, end in zip(points[:-1], points[1:], strict=True):
+          rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
+                          self._color(ROAD_EDGE, 86 * confidence * alpha))
+
+    if lanes is not None:
+      for index in (1, 2):
+        if index >= len(lanes) or index >= len(lane_probs):
+          continue
+        confidence = float(np.clip(lane_probs[index], 0.0, 1.0))
+        if confidence < 0.45:
+          continue
+        points = self._project_line(rect, lanes[index])
+        width = 0.9 if self._compact else 2.2
+        for start, end in zip(points[:-1], points[1:], strict=True):
+          rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
+                          self._color(ROAD_MARKING, 58 * confidence * alpha))
+
+  def _draw_future_poses(self, rect: rl.Rectangle, poses: tuple[FuturePose, ...],
+                         path_offset_z: float, alpha: float) -> None:
+    """Show time-indexed ego footprints directly from modelV2's future pose."""
+    for index, pose in enumerate(poses):
+      if not 4.0 <= pose.x <= 65.0:
         continue
-      confidence = float(np.clip(lane_probs[index], 0.0, 1.0))
-      if confidence < 0.45:
+      forward = np.array((math.cos(pose.yaw), math.sin(pose.yaw)))
+      lateral = np.array((-math.sin(pose.yaw), math.cos(pose.yaw)))
+      center = np.array((pose.x, pose.y))
+      corners = (
+        center + forward * 1.8 + lateral * 0.82,
+        center + forward * 1.8 - lateral * 0.82,
+        center - forward * 1.8 - lateral * 0.82,
+        center - forward * 1.8 + lateral * 0.82,
+      )
+      projected = [self._project(rect, (float(point[0]), float(point[1]), pose.z + path_offset_z)) for point in corners]
+      if any(point is None for point in projected):
         continue
-      points = self._project_line(rect, lanes[index])
-      width = 0.9 if self._compact else 2.2
-      for start, end in zip(points[:-1], points[1:], strict=True):
-        rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
-                        self._color(ROAD_MARKING, 58 * confidence * alpha))
+      footprint = tuple(point for point in projected if point is not None)
+      opacity = (78 - index * 17) * alpha
+      rl.draw_triangle_fan(footprint, len(footprint), self._color(TESLA_BLUE, opacity))
+
+  def _draw_blindspot_guard(self, rect: rl.Rectangle, car_state, alpha: float) -> None:
+    """Blind-spot messages have no object position, so only mark the affected side."""
+    for blocked, side in ((car_state.leftBlindspot, -1), (car_state.rightBlindspot, 1)):
+      if not blocked:
+        continue
+      x = rect.x + (rect.width * (0.035 if side < 0 else 0.965))
+      y0 = rect.y + rect.height * 0.56
+      y1 = rect.y + rect.height * 0.82
+      glow = 8.0 if self._compact else 20.0
+      core = 2.0 if self._compact else 5.0
+      rl.draw_line_ex(rl.Vector2(x, y0), rl.Vector2(x, y1), glow, self._color(BLOCKED_RED, 34 * alpha))
+      rl.draw_line_ex(rl.Vector2(x, y0), rl.Vector2(x, y1), core, self._color(BLOCKED_RED, 220 * alpha))
 
   def _draw_scene_background(self, rect: rl.Rectangle, path: np.ndarray | None,
                              path_offset_z: float, alpha: float) -> None:
@@ -582,8 +647,8 @@ class IntentOverlay(Widget):
       rl.draw_line_ex(rl.Vector2(*left), rl.Vector2(*right), glow_width, self._color(color, 45 * alpha * pulse))
       rl.draw_line_ex(rl.Vector2(*left), rl.Vector2(*right), core_width, self._color(color, core_alpha * alpha * pulse))
 
-  def _draw_controlling_lead(self, rect: rl.Rectangle, model, radar_state, lead_index: int,
-                             path_offset_z: float, alpha: float) -> None:
+  def _draw_lead(self, rect: rl.Rectangle, model, radar_state, lead_index: int,
+                 path_offset_z: float, alpha: float, controlling: bool) -> None:
     leads = (radar_state.leadOne, radar_state.leadTwo)
     if lead_index >= len(leads) or not leads[lead_index].present:
       if lead_index < len(self._smoothed_leads):
@@ -623,15 +688,17 @@ class IntentOverlay(Widget):
     )
     rl.draw_ellipse(int(x), int(bottom + size * 0.12), size * 0.72, size * 0.23,
                     self._color(UI_BLACK, 82 * alpha))
-    rl.draw_triangle_fan(body, len(body), self._color(rl.Color(198, 207, 214, 255), 218 * alpha))
+    body_alpha = 218 if controlling else 150
+    rl.draw_triangle_fan(body, len(body), self._color(rl.Color(198, 207, 214, 255), body_alpha * alpha))
     rl.draw_triangle_fan(window, len(window), self._color(rl.Color(48, 62, 74, 255), 224 * alpha))
 
     outline_width = 1.5 if self._compact else 3.5
+    outline_color = TESLA_BLUE if controlling else ROAD_MARKING
     for start, end in zip(body, (*body[1:], body[0]), strict=True):
       rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), outline_width * 2.8,
-                      self._color(TESLA_BLUE, 30 * alpha))
+                      self._color(outline_color, 30 * alpha))
       rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), outline_width,
-                      self._color(TESLA_BLUE, 205 * alpha))
+                      self._color(outline_color, (205 if controlling else 112) * alpha))
 
   @staticmethod
   def _intent_card_text(state: IntentState, lateral_active: bool, longitudinal_active: bool) -> str | None:
@@ -686,6 +753,7 @@ class IntentOverlay(Widget):
       self._alpha_filter.x = 0.0
       self._smoothed_path = None
       self._smoothed_lanes = None
+      self._smoothed_edges = None
       self._smoothed_leads = [None, None]
       return
 
@@ -699,22 +767,27 @@ class IntentOverlay(Widget):
     plan_valid = self._message_valid(sm, 'longitudinalPlan')
     plan = sm['longitudinalPlan'] if plan_valid else None
     state = derive_intent_state(model, plan, sm['carState'])
-    path, lanes = self._update_geometry(model)
+    path, lanes, edges = self._update_geometry(model)
 
     self._draw_scene_background(rect, path, self._path_offset_z, alpha)
     if car_control.latActive:
-      self._draw_road_context(rect, lanes, model.laneLineProbs, alpha)
+      self._draw_road_context(rect, lanes, model.laneLineProbs, edges, model.roadEdgeStds, alpha)
     if car_control.latActive and path is not None:
       self._draw_trajectory(rect, path, self._path_offset_z, alpha)
+      self._draw_future_poses(rect, state.future_poses, self._path_offset_z, alpha)
     if car_control.latActive and lanes is not None and state.lane_change is not None:
       self._draw_lane_target(rect, lanes, model.laneLineProbs, state.lane_change, alpha)
     if car_control.latActive and path is not None:
       self._draw_path_pulse(rect, path, self._path_offset_z, alpha)
     if self._longitudinal_control and car_control.longActive and state.stop is not None and path is not None:
       self._draw_stop(rect, path, state.stop, self._path_offset_z, alpha)
-    if (self._longitudinal_control and car_control.longActive and state.controlling_lead_index is not None and
-        self._message_valid(sm, 'radarState')):
-      self._draw_controlling_lead(rect, model, sm['radarState'], state.controlling_lead_index, self._path_offset_z, alpha)
+    if self._message_valid(sm, 'radarState'):
+      controlling_index = state.controlling_lead_index if self._longitudinal_control and car_control.longActive else None
+      for lead_index, lead in enumerate((sm['radarState'].leadOne, sm['radarState'].leadTwo)):
+        if lead.present:
+          self._draw_lead(rect, model, sm['radarState'], lead_index, self._path_offset_z, alpha,
+                          controlling=lead_index == controlling_index)
+    self._draw_blindspot_guard(rect, sm['carState'], alpha)
     self._draw_ego_vehicle(rect, alpha)
     self._draw_intent_card(
       rect, state, alpha,
