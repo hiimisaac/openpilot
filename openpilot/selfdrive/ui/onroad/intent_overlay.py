@@ -30,6 +30,7 @@ GEOMETRY_SMOOTHING_RC = 0.10
 SCENE_DEPTH_METERS = 30.0
 SCENE_NEAR_LATERAL_SCALE = 0.11
 SCENE_FAR_LATERAL_SCALE = 0.012
+VEHICLE_SPRITE_VISIBLE_BOTTOM = 641.0 / 768.0
 
 
 def draw_solid_ribbon(points: list[tuple[float, float]], color: rl.Color) -> None:
@@ -685,7 +686,8 @@ class IntentOverlay(Widget):
     size = float(far_size + (near_size - far_size) * math.exp(-max(float(lead.dRel), 0.0) / 34.0))
     x, ground_y = smoothed
     sprite_size = size * 1.55
-    sprite_center_y = ground_y - sprite_size * 0.42
+    visible_bottom_offset = (VEHICLE_SPRITE_VISIBLE_BOTTOM - 0.5) * sprite_size
+    sprite_center_y = ground_y - visible_bottom_offset
     top, middle, bottom = ground_y - size * 1.18, ground_y - size * 0.55, ground_y + size * 0.04
     body = (
       (x - size * 0.52, bottom),
@@ -701,11 +703,6 @@ class IntentOverlay(Widget):
       (x + size * 0.25, top + size * 0.18),
       (x + size * 0.31, middle - size * 0.06),
     )
-    if controlling:
-      rl.draw_ellipse(int(x), int(ground_y), size * 0.82, size * 0.24,
-                      self._color(TESLA_BLUE, 42 * alpha))
-    rl.draw_ellipse(int(x), int(ground_y + size * 0.03), size * 0.58, size * 0.14,
-                    self._color(UI_BLACK, 92 * alpha))
     if self._draw_vehicle_sprite(float(x), float(sprite_center_y), sprite_size, 0.0,
                                  self._color(UI_WHITE, (235 if controlling else 165) * alpha)):
       return

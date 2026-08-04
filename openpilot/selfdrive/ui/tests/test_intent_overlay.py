@@ -430,13 +430,16 @@ def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
   with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle, \
        patch.object(intent_overlay.rl, 'draw_ellipse') as draw_ground_contact, \
        patch.object(intent_overlay.rl, 'draw_ellipse_lines'):
-    overlay._draw_lead(rl.Rectangle(0, 0, 400, 220), model, radar_state, 0, 0.0, 1.0, controlling=True)
+    rect = rl.Rectangle(0, 0, 400, 220)
+    overlay._draw_lead(rect, model, radar_state, 0, 0.0, 1.0, controlling=True)
 
   draw_vehicle.assert_called_once()
   vehicle_rect = draw_vehicle.call_args.args[2]
-  shadow_y = draw_ground_contact.call_args_list[-1].args[1]
+  ground_y = overlay._project(rect, (20.0, 0.0, 0.0))[1]
+  visible_bottom = vehicle_rect.y + (intent_overlay.VEHICLE_SPRITE_VISIBLE_BOTTOM - 0.5) * vehicle_rect.height
   assert vehicle_rect.width < 70.0
-  assert abs((vehicle_rect.y + vehicle_rect.height * 0.5) - shadow_y) < vehicle_rect.height * 0.2
+  assert np.isclose(visible_bottom, ground_y)
+  draw_ground_contact.assert_not_called()
 
 
 def test_radar_lead_grows_decisively_as_distance_closes():
