@@ -427,7 +427,7 @@ def test_geometry_smoothing_interpolates_without_lagging_first_frame():
   assert np.all((third > second) & (third < target))
 
 
-def test_ego_sprite_turns_with_smoothed_road_wheel_angle():
+def test_ego_sprite_stays_upright_in_ego_centered_scene():
   overlay = IntentOverlay(compact=True)
   overlay._ego_texture = message(width=768, height=768)
   rect = rl.Rectangle(0, 0, 400, 220)
@@ -437,10 +437,10 @@ def test_ego_sprite_turns_with_smoothed_road_wheel_angle():
        patch.object(intent_overlay.rl, 'draw_ellipse'), \
        patch.object(intent_overlay.rl, 'draw_circle'), \
        patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
-    overlay._draw_ego_vehicle(rect, car_state, steer_ratio=15.0, braking=False, alpha=1.0)
+    overlay._draw_ego_vehicle(rect, car_state, braking=False, alpha=1.0)
 
   rotation = draw_vehicle.call_args.args[4]
-  assert -8.0 <= rotation < 0.0
+  assert rotation == 0.0
 
 
 def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():

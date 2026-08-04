@@ -242,7 +242,6 @@ class IntentOverlay(Widget):
     self._path_offset_z = 0.0
     self._render_state: IntentState | None = None
     self._ego_texture: rl.Texture | None = None
-    self._ego_rotation_filter = FirstOrderFilter(0.0, 0.16, 1 / gui_app.target_fps)
 
   def set_transform(self, _transform: np.ndarray) -> None:
     # Kept for the ModelRenderer interface. The dedicated world scene deliberately
@@ -526,8 +525,7 @@ class IntentOverlay(Widget):
         amber = rl.Color(255, 177, 48, 255)
         rl.draw_circle(int(point[0]), int(point[1]), size * 0.045, self._color(amber, 210 * alpha))
 
-  def _draw_ego_vehicle(self, rect: rl.Rectangle, car_state, steer_ratio: float,
-                        braking: bool, alpha: float) -> None:
+  def _draw_ego_vehicle(self, rect: rl.Rectangle, car_state, braking: bool, alpha: float) -> None:
     if not self._ensure_vehicle_texture():
       return
 
@@ -538,9 +536,7 @@ class IntentOverlay(Widget):
     center_x = rect.x + rect.width * 0.5
     bottom = rect.y + rect.height
     center_y = bottom - size * 0.42
-    ratio = float(np.clip(steer_ratio, 8.0, 25.0))
-    rotation_target = float(np.clip(-getattr(car_state, 'steeringAngleDeg', 0.0) / ratio, -8.0, 8.0))
-    rotation = self._ego_rotation_filter.update(rotation_target)
+    rotation = 0.0
 
     rl.draw_ellipse(
       int(center_x), int(bottom - size * 0.075),
@@ -841,10 +837,9 @@ class IntentOverlay(Widget):
           self._draw_lead(rect, model, sm['radarState'], lead_index, self._path_offset_z, alpha,
                           controlling=lead_index == controlling_index)
     self._draw_blindspot_guard(rect, sm['carState'], alpha)
-    steer_ratio = sm['carParams'].steerRatio if self._message_valid(sm, 'carParams') else 15.0
     commanded_accel = getattr(getattr(car_control, 'actuators', None), 'accel', 0.0)
     braking = bool(self._longitudinal_control and car_control.longActive and commanded_accel < -0.12)
-    self._draw_ego_vehicle(rect, sm['carState'], steer_ratio, braking, alpha)
+    self._draw_ego_vehicle(rect, sm['carState'], braking, alpha)
     self._draw_intent_card(
       rect, state, alpha,
       lateral_active=car_control.latActive,
