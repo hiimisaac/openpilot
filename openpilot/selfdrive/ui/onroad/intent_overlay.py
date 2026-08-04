@@ -454,7 +454,7 @@ class IntentOverlay(Widget):
     )
 
   def _draw_vehicle_lights(self, center_x: float, center_y: float, size: float, rotation: float,
-                           car_state, braking: bool, alpha: float) -> None:
+                           braking: bool, alpha: float) -> None:
     left = self._rotated_offset(center_x, center_y, -size * 0.21, size * 0.18, rotation)
     right = self._rotated_offset(center_x, center_y, size * 0.21, size * 0.18, rotation)
     if braking:
@@ -462,14 +462,7 @@ class IntentOverlay(Widget):
         rl.draw_circle(int(point[0]), int(point[1]), size * 0.055, self._color(BLOCKED_RED, 48 * alpha))
         rl.draw_circle(int(point[0]), int(point[1]), size * 0.025, self._color(BLOCKED_RED, 235 * alpha))
 
-    blink_on = (rl.get_time() % 1.0) < 0.52
-    for enabled, point in ((getattr(car_state, 'leftBlinker', False), left),
-                           (getattr(car_state, 'rightBlinker', False), right)):
-      if enabled and blink_on:
-        amber = rl.Color(255, 177, 48, 255)
-        rl.draw_circle(int(point[0]), int(point[1]), size * 0.045, self._color(amber, 210 * alpha))
-
-  def _draw_ego_vehicle(self, rect: rl.Rectangle, car_state, braking: bool, alpha: float) -> None:
+  def _draw_ego_vehicle(self, rect: rl.Rectangle, braking: bool, alpha: float) -> None:
     if not self._ensure_vehicle_texture():
       return
 
@@ -488,7 +481,7 @@ class IntentOverlay(Widget):
       self._color(UI_BLACK, 112 * alpha),
     )
     self._draw_vehicle_sprite(center_x, center_y, size, rotation, self._color(UI_WHITE, 255 * alpha))
-    self._draw_vehicle_lights(center_x, center_y, size, rotation, car_state, braking, alpha)
+    self._draw_vehicle_lights(center_x, center_y, size, rotation, braking, alpha)
 
   def _draw_trajectory(self, rect: rl.Rectangle, path: np.ndarray, path_offset_z: float, alpha: float) -> None:
     # A solid vehicle-width ribbon reads as one committed path, instead of a
@@ -690,8 +683,10 @@ class IntentOverlay(Widget):
     # exponential sizing makes that depth change equally obvious at a glance.
     far_size, near_size = ((7.0, 50.0) if self._compact else (18.0, 128.0))
     size = float(far_size + (near_size - far_size) * math.exp(-max(float(lead.dRel), 0.0) / 34.0))
-    x, y = smoothed
-    top, middle, bottom = y - size * 0.62, y + size * 0.18, y + size * 0.92
+    x, ground_y = smoothed
+    sprite_size = size * 1.55
+    sprite_center_y = ground_y - sprite_size * 0.42
+    top, middle, bottom = ground_y - size * 1.18, ground_y - size * 0.55, ground_y + size * 0.04
     body = (
       (x - size * 0.52, bottom),
       (x - size * 0.68, middle),
@@ -706,12 +701,12 @@ class IntentOverlay(Widget):
       (x + size * 0.25, top + size * 0.18),
       (x + size * 0.31, middle - size * 0.06),
     )
-    rl.draw_ellipse(int(x), int(bottom + size * 0.12), size * 0.72, size * 0.23,
-                    self._color(UI_BLACK, 82 * alpha))
     if controlling:
-      rl.draw_ellipse(int(x), int(middle), size * 0.72, size * 0.86,
-                      self._color(TESLA_BLUE, 30 * alpha))
-    if self._draw_vehicle_sprite(float(x), float(middle), size * 1.55, 0.0,
+      rl.draw_ellipse(int(x), int(ground_y), size * 0.82, size * 0.24,
+                      self._color(TESLA_BLUE, 42 * alpha))
+    rl.draw_ellipse(int(x), int(ground_y + size * 0.03), size * 0.58, size * 0.14,
+                    self._color(UI_BLACK, 92 * alpha))
+    if self._draw_vehicle_sprite(float(x), float(sprite_center_y), sprite_size, 0.0,
                                  self._color(UI_WHITE, (235 if controlling else 165) * alpha)):
       return
 
@@ -779,5 +774,5 @@ class IntentOverlay(Widget):
     self._draw_blindspot_guard(rect, sm['carState'], alpha)
     commanded_accel = getattr(getattr(car_control, 'actuators', None), 'accel', 0.0)
     braking = bool(self._longitudinal_control and car_control.longActive and commanded_accel < -0.12)
-    self._draw_ego_vehicle(rect, sm['carState'], braking, alpha)
+    self._draw_ego_vehicle(rect, braking, alpha)
     self._render_state = state

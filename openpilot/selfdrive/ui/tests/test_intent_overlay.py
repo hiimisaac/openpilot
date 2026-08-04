@@ -398,16 +398,23 @@ def test_ego_sprite_stays_upright_in_ego_centered_scene():
   overlay = IntentOverlay(compact=True)
   overlay._ego_texture = message(width=768, height=768)
   rect = rl.Rectangle(0, 0, 400, 220)
-  car_state = message(steeringAngleDeg=120.0, leftBlinker=False, rightBlinker=False)
 
   with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle, \
        patch.object(intent_overlay.rl, 'draw_ellipse'), \
        patch.object(intent_overlay.rl, 'draw_circle'), \
        patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
-    overlay._draw_ego_vehicle(rect, car_state, braking=False, alpha=1.0)
+    overlay._draw_ego_vehicle(rect, braking=False, alpha=1.0)
 
   rotation = draw_vehicle.call_args.args[4]
   assert rotation == 0.0
+
+
+def test_ego_vehicle_has_no_blinking_light_animation():
+  overlay = IntentOverlay(compact=True)
+  with patch.object(intent_overlay.rl, 'draw_circle') as draw_light:
+    overlay._draw_vehicle_lights(200.0, 180.0, 80.0, 0.0, braking=False, alpha=1.0)
+
+  draw_light.assert_not_called()
 
 
 def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
@@ -421,12 +428,15 @@ def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
   )
 
   with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle, \
-       patch.object(intent_overlay.rl, 'draw_ellipse'), \
+       patch.object(intent_overlay.rl, 'draw_ellipse') as draw_ground_contact, \
        patch.object(intent_overlay.rl, 'draw_ellipse_lines'):
     overlay._draw_lead(rl.Rectangle(0, 0, 400, 220), model, radar_state, 0, 0.0, 1.0, controlling=True)
 
   draw_vehicle.assert_called_once()
-  assert draw_vehicle.call_args.args[2].width < 70.0
+  vehicle_rect = draw_vehicle.call_args.args[2]
+  shadow_y = draw_ground_contact.call_args_list[-1].args[1]
+  assert vehicle_rect.width < 70.0
+  assert abs((vehicle_rect.y + vehicle_rect.height * 0.5) - shadow_y) < vehicle_rect.height * 0.2
 
 
 def test_radar_lead_grows_decisively_as_distance_closes():
