@@ -20,6 +20,9 @@ LANE_PROB_THRESHOLD = 0.25
 TESLA_BLUE = rl.Color(52, 132, 255, 255)
 PATH_HIGHLIGHT = rl.Color(116, 190, 255, 255)
 ROAD_MARKING = rl.Color(224, 232, 238, 255)
+SCENE_HORIZON = rl.Color(47, 54, 62, 255)
+SCENE_FOREGROUND = rl.Color(12, 16, 21, 255)
+ROAD_SURFACE = rl.Color(55, 61, 68, 255)
 UI_BLACK = rl.Color(0, 0, 0, 255)
 UI_WHITE = rl.Color(255, 255, 255, 255)
 BLOCKED_RED = rl.Color(255, 75, 85, 255)
@@ -234,6 +237,7 @@ class IntentOverlay(Widget):
     self._longitudinal_control = False
     self._path_offset_z = 0.0
     self._render_state: IntentState | None = None
+    self._ego_texture: rl.Texture | None = None
 
   def set_transform(self, transform: np.ndarray) -> None:
     self._car_space_transform = np.asarray(transform, dtype=np.float64)
@@ -374,7 +378,50 @@ class IntentOverlay(Widget):
       width = 1.1 if self._compact else 2.8
       for start, end in zip(points[:-1], points[1:], strict=True):
         rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
-                        self._color(ROAD_MARKING, 92 * confidence * alpha))
+                        self._color(ROAD_MARKING, 132 * confidence * alpha))
+
+  def _draw_scene_background(self, rect: rl.Rectangle, alpha: float) -> None:
+    """Replace the camera with a restrained pseudo-3D road scene."""
+    rl.draw_rectangle_gradient_v(
+      int(rect.x), int(rect.y), int(rect.width), int(rect.height),
+      self._color(SCENE_HORIZON, 255 * alpha),
+      self._color(SCENE_FOREGROUND, 255 * alpha),
+    )
+
+    center_x = rect.x + rect.width * 0.5
+    horizon_y = rect.y + rect.height * (0.13 if self._compact else 0.10)
+    road = (
+      (center_x - rect.width * 0.105, horizon_y),
+      (center_x + rect.width * 0.105, horizon_y),
+      (rect.x + rect.width * 1.06, rect.y + rect.height),
+      (rect.x - rect.width * 0.06, rect.y + rect.height),
+    )
+    rl.draw_triangle_fan(road, len(road), self._color(ROAD_SURFACE, 238 * alpha))
+
+  def _draw_ego_vehicle(self, rect: rl.Rectangle, alpha: float) -> None:
+    if self._ego_texture is None and rl.is_window_ready():
+      self._ego_texture = gui_app.texture("images/intent_ego_vehicle.png", alpha_premultiply=True)
+    if self._ego_texture is None:
+      return
+
+    size = min(
+      rect.width * (0.34 if self._compact else 0.27),
+      rect.height * (0.68 if self._compact else 0.48),
+    )
+    center_x = rect.x + rect.width * 0.5
+    bottom = rect.y + rect.height
+    dest = rl.Rectangle(center_x - size * 0.5, bottom - size * 0.92, size, size)
+    source = rl.Rectangle(0, 0, self._ego_texture.width, self._ego_texture.height)
+
+    rl.draw_ellipse(
+      int(center_x), int(bottom - size * 0.075),
+      size * 0.31, size * 0.075,
+      self._color(UI_BLACK, 112 * alpha),
+    )
+    rl.draw_texture_pro(
+      self._ego_texture, source, dest, rl.Vector2(0, 0), 0.0,
+      self._color(UI_WHITE, 255 * alpha),
+    )
 
   def _draw_trajectory(self, rect: rl.Rectangle, path: np.ndarray, path_offset_z: float, alpha: float) -> None:
     half_width = 1.38 if self._compact else 1.62
@@ -387,19 +434,19 @@ class IntentOverlay(Widget):
       start=(0.0, 1.0),
       end=(0.0, 0.0),
       colors=[
-        self._color(TESLA_BLUE, 172 * alpha),
-        self._color(TESLA_BLUE, 112 * alpha),
-        self._color(PATH_HIGHLIGHT, 20 * alpha),
+        self._color(TESLA_BLUE, 210 * alpha),
+        self._color(TESLA_BLUE, 148 * alpha),
+        self._color(PATH_HIGHLIGHT, 32 * alpha),
       ],
       stops=[0.0, 0.58, 1.0],
     )
     draw_polygon(rect, polygon, gradient=gradient)
 
-    if not self._compact:
-      rail_color = self._color(TESLA_BLUE, 118 * alpha)
-      for boundary in (left, right):
-        for start, end in zip(boundary[:-1], boundary[1:], strict=True):
-          rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), 2.4, rail_color)
+    rail_color = self._color(PATH_HIGHLIGHT, 212 * alpha)
+    rail_width = 1.7 if self._compact else 4.5
+    for boundary in (left, right):
+      for start, end in zip(boundary[:-1], boundary[1:], strict=True):
+        rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), rail_width, rail_color)
 
   def _draw_path_pulse(self, rect: rl.Rectangle, path: np.ndarray,
                        path_offset_z: float, alpha: float) -> None:
@@ -638,6 +685,7 @@ class IntentOverlay(Widget):
     state = derive_intent_state(model, plan, sm['carState'])
     path, lanes = self._update_geometry(model)
 
+    self._draw_scene_background(rect, alpha)
     if car_control.latActive:
       self._draw_road_context(rect, lanes, model.laneLineProbs, alpha)
     if car_control.latActive and path is not None:
@@ -651,6 +699,7 @@ class IntentOverlay(Widget):
     if (self._longitudinal_control and car_control.longActive and state.controlling_lead_index is not None and
         self._message_valid(sm, 'radarState')):
       self._draw_controlling_lead(rect, model, sm['radarState'], state.controlling_lead_index, self._path_offset_z, alpha)
+    self._draw_ego_vehicle(rect, alpha)
     self._draw_intent_card(
       rect, state, alpha,
       lateral_active=car_control.latActive,
