@@ -189,16 +189,89 @@ def test_intent_card_does_not_claim_inactive_longitudinal_control():
   assert IntentOverlay._intent_card_text(state, lateral_active=True, longitudinal_active=True) == "FOLLOWING VEHICLE"
 
 
-def test_projection_uses_absolute_big_coordinates_and_rect_local_compact_coordinates():
-  rect = rl.Rectangle(100, 50, 300, 180)
-  transform = np.eye(3)
-  big = IntentOverlay(compact=False)
-  compact = IntentOverlay(compact=True)
-  big.set_transform(transform)
-  compact.set_transform(transform)
+def test_world_scene_uses_one_chase_view_independent_of_camera_calibration():
+  model = empty_model()
+  model.position = message(
+    t=[0.0, 1.0, 2.0, 3.0, 4.0],
+    x=[1.0, 8.0, 18.0, 35.0, 60.0],
+    y=[0.0, 0.1, 0.5, 1.6, 3.0],
+    z=[1.0] * 5,
+  )
+  model.velocity = message(t=model.position.t, x=[10.0] * 5)
+  model.orientation = message(t=model.position.t, z=[0.0, 0.01, 0.04, 0.08, 0.12])
+  sm = FakeSubMaster(
+    modelV2=model,
+    longitudinalPlan=empty_plan(),
+    carState=empty_car_state(),
+    carControl=message(latActive=True, longActive=False),
+  )
+  rect = rl.Rectangle(0, 0, 400, 220)
 
-  assert np.allclose(big._project(rect, (120.0, 80.0, 1.0)), (120.0, 80.0))
-  assert np.allclose(compact._project(rect, (20.0, 30.0, 1.0)), (120.0, 80.0))
+  def rendered_path(transform):
+    overlay = IntentOverlay(compact=False)
+    overlay.set_transform(transform)
+    overlay._alpha_filter.x = 1.0
+    with patch.object(intent_overlay, 'draw_polygon') as draw_polygon, \
+         patch.object(intent_overlay.rl, 'draw_line_ex'), \
+         patch.object(intent_overlay.rl, 'draw_triangle_fan'), \
+         patch.object(intent_overlay.rl, 'draw_rectangle_gradient_v'), \
+         patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
+      overlay.render_intent(rect, sm, enabled=True, longitudinal_control=False, path_offset_z=1.0)
+    return np.asarray(next(call.args[1] for call in draw_polygon.call_args_list if 'gradient' in call.kwargs))
+
+  first = rendered_path(np.array([
+    [200.0, 20.0, 0.0],
+    [100.0, 0.0, -45.0],
+    [1.0, 0.0, 0.0],
+  ]))
+  second = rendered_path(np.array([
+    [220.0, 35.0, 0.0],
+    [95.0, 0.0, -65.0],
+    [1.0, 0.0, 0.0],
+  ]))
+
+  assert np.allclose(first, second)
+  half = len(first) // 2
+  near_width = np.linalg.norm(first[0] - first[-1])
+  far_width = np.linalg.norm(first[half - 1] - first[half])
+  assert near_width > far_width * 1.5
+  assert first[0, 1] > first[half - 1, 1]
+
+
+def test_world_scene_road_surface_follows_curved_model_path():
+  model = empty_model()
+  model.position = message(
+    t=[0.0, 1.0, 2.0, 3.0, 4.0],
+    x=[1.0, 8.0, 18.0, 35.0, 60.0],
+    y=[0.0, 0.2, 0.8, 2.2, 4.0],
+    z=[1.0] * 5,
+  )
+  model.velocity = message(t=model.position.t, x=[10.0] * 5)
+  model.orientation = message(t=model.position.t, z=[0.0, 0.02, 0.06, 0.1, 0.14])
+  sm = FakeSubMaster(
+    modelV2=model,
+    longitudinalPlan=empty_plan(),
+    carState=empty_car_state(),
+    carControl=message(latActive=True, longActive=False),
+  )
+  overlay = IntentOverlay(compact=False)
+  overlay._alpha_filter.x = 1.0
+
+  with patch.object(intent_overlay, 'draw_polygon') as draw_polygon, \
+       patch.object(intent_overlay.rl, 'draw_line_ex'), \
+       patch.object(intent_overlay.rl, 'draw_triangle_fan'), \
+       patch.object(intent_overlay.rl, 'draw_rectangle_gradient_v'), \
+       patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
+    overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
+                          longitudinal_control=False, path_offset_z=1.0)
+
+  road_call = draw_polygon.call_args_list[0]
+  assert 'gradient' not in road_call.kwargs
+  road = np.asarray(road_call.args[1])
+  half = len(road) // 2
+  near_center_x = (road[0, 0] + road[-1, 0]) * 0.5
+  far_center_x = (road[half - 1, 0] + road[half, 0]) * 0.5
+  assert far_center_x > near_center_x + 3.0
 
 
 def test_path_sample_places_travel_distance_along_curved_model_path():
@@ -221,7 +294,6 @@ def test_big_renderer_forwards_transform_and_current_intent_state():
   rect = rl.Rectangle(0, 0, 400, 220)
 
   assert not renderer._intent_overlay._compact
-  assert np.array_equal(renderer._intent_overlay._car_space_transform, transform)
   with patch.object(big_model_renderer.ui_state, 'sm', sm), \
        patch.object(big_model_renderer.ui_state, 'started_frame', 0), \
        patch.object(big_model_renderer.ui_state, 'driving_intent_enabled', True), \
@@ -245,7 +317,6 @@ def test_compact_renderer_forwards_transform_and_current_intent_state():
   rect = rl.Rectangle(100, 50, 400, 220)
 
   assert renderer._intent_overlay._compact
-  assert np.array_equal(renderer._intent_overlay._car_space_transform, transform)
   with patch.object(mici_model_renderer.ui_state, 'sm', sm), \
        patch.object(mici_model_renderer.ui_state, 'started_frame', 0), \
        patch.object(mici_model_renderer.ui_state, 'status', UIStatus.ENGAGED), \
@@ -338,7 +409,7 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
   assert state is not None
   assert draw_polygon.called
   assert draw_line.call_count >= 10
-  assert draw_vehicle.call_count == 3
+  assert draw_vehicle.call_count == 2
 
 
 def test_geometry_smoothing_interpolates_without_lagging_first_frame():
@@ -394,9 +465,19 @@ def test_compact_scene_keeps_path_bold_without_wireframe_clutter():
     overlay.render_intent(rl.Rectangle(100, 50, 400, 220), sm, enabled=True,
                           longitudinal_control=False, path_offset_z=1.0)
 
-  trajectory_gradient = draw_polygon.call_args_list[0].kwargs['gradient']
+  trajectory_gradient = next(call.kwargs['gradient'] for call in draw_polygon.call_args_list if 'gradient' in call.kwargs)
   assert draw_line.call_count <= 24
   assert max(color.a for color in trajectory_gradient.colors) >= 120
+  lane_alphas = [
+    call.args[3].a for call in draw_line.call_args_list
+    if call.args[3].r == intent_overlay.ROAD_MARKING.r and call.args[3].g == intent_overlay.ROAD_MARKING.g
+  ]
+  corridor_alphas = [
+    call.args[3].a for call in draw_line.call_args_list
+    if call.args[3].r == intent_overlay.PATH_HIGHLIGHT.r and call.args[3].g == intent_overlay.PATH_HIGHLIGHT.g
+  ]
+  assert lane_alphas and max(lane_alphas) <= 64
+  assert corridor_alphas and max(corridor_alphas) >= 180
   draw_scene.assert_called_once()
 
 
@@ -479,8 +560,8 @@ def test_big_overlay_draws_single_smoothly_animated_path_pulse():
          patch.object(intent_overlay.rl, 'get_time', return_value=now):
       overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
                             longitudinal_control=False, path_offset_z=1.0)
-    frames.append([call.args[1].tolist() for call in draw_polygon.call_args_list[1:]])
-    assert draw_shape.call_count == 1  # road surface only; no pose chevrons
+    frames.append([call.args[1].tolist() for call in draw_polygon.call_args_list[-2:]])
+    assert draw_shape.call_count == 0  # no pose chevrons
 
   assert len(frames[0]) == 2
   assert frames[0] != frames[1]

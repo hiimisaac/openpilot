@@ -29,6 +29,9 @@ BLOCKED_RED = rl.Color(255, 75, 85, 255)
 GEOMETRY_SMOOTHING_RC = 0.10
 PATH_PULSE_SPEED = 5.0
 PATH_PULSE_LENGTH = 9.0
+SCENE_DEPTH_METERS = 30.0
+SCENE_NEAR_LATERAL_SCALE = 0.11
+SCENE_FAR_LATERAL_SCALE = 0.012
 
 
 class StopKind(StrEnum):
@@ -220,13 +223,12 @@ def derive_intent_state(model, plan, car_state) -> IntentState:
 
 
 class IntentOverlay(Widget):
-  """Render calibrated driving intent from existing model and control messages."""
+  """Render a virtual chase-view scene from existing model and control messages."""
 
   def __init__(self, compact: bool):
     super().__init__()
     self.set_enabled(False)
     self._compact = compact
-    self._car_space_transform = np.zeros((3, 3), dtype=np.float64)
     self._alpha_filter = FirstOrderFilter(0.0, 0.15, 1 / gui_app.target_fps)
     self._geometry_alpha = (1 / gui_app.target_fps) / (GEOMETRY_SMOOTHING_RC + 1 / gui_app.target_fps)
     self._smoothed_path: np.ndarray | None = None
@@ -239,8 +241,10 @@ class IntentOverlay(Widget):
     self._render_state: IntentState | None = None
     self._ego_texture: rl.Texture | None = None
 
-  def set_transform(self, transform: np.ndarray) -> None:
-    self._car_space_transform = np.asarray(transform, dtype=np.float64)
+  def set_transform(self, _transform: np.ndarray) -> None:
+    # Kept for the ModelRenderer interface. The dedicated world scene deliberately
+    # does not inherit the physical road-camera calibration.
+    pass
 
   @staticmethod
   def _message_valid(sm, service: str) -> bool:
@@ -252,17 +256,21 @@ class IntentOverlay(Widget):
     return rl.Color(color.r, color.g, color.b, int(np.clip(alpha, 0.0, 255.0)))
 
   def _project(self, rect: rl.Rectangle, point: tuple[float, float, float]) -> tuple[float, float] | None:
-    projected = self._car_space_transform @ np.asarray(point, dtype=np.float64)
-    if not np.all(np.isfinite(projected)) or abs(projected[2]) < 1e-6:
+    forward, lateral, _height = point
+    if not np.all(np.isfinite(point)) or not 0.0 <= forward <= MAX_DRAW_DISTANCE:
       return None
 
-    offset_x = rect.x if self._compact else 0.0
-    offset_y = rect.y if self._compact else 0.0
-    x = float(projected[0] / projected[2] + offset_x)
-    y = float(projected[1] / projected[2] + offset_y)
-    if not (rect.x <= x <= rect.x + rect.width and rect.y <= y <= rect.y + rect.height):
-      return None
-    return x, y
+    progress = 1.0 - math.exp(-forward / SCENE_DEPTH_METERS)
+    near_y = rect.y + rect.height * 0.98
+    horizon_y = rect.y + rect.height * (0.18 if self._compact else 0.15)
+    y = near_y + (horizon_y - near_y) * progress
+
+    lateral_scale = rect.width * (
+      SCENE_FAR_LATERAL_SCALE +
+      (SCENE_NEAR_LATERAL_SCALE - SCENE_FAR_LATERAL_SCALE) * (1.0 - progress)
+    )
+    x = rect.x + rect.width * 0.5 + lateral * lateral_scale
+    return float(x), float(y)
 
   @staticmethod
   def _model_path(model) -> np.ndarray | None:
@@ -375,18 +383,26 @@ class IntentOverlay(Widget):
       if confidence < 0.45:
         continue
       points = self._project_line(rect, lanes[index])
-      width = 1.1 if self._compact else 2.8
+      width = 0.9 if self._compact else 2.2
       for start, end in zip(points[:-1], points[1:], strict=True):
         rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
-                        self._color(ROAD_MARKING, 132 * confidence * alpha))
+                        self._color(ROAD_MARKING, 58 * confidence * alpha))
 
-  def _draw_scene_background(self, rect: rl.Rectangle, alpha: float) -> None:
+  def _draw_scene_background(self, rect: rl.Rectangle, path: np.ndarray | None,
+                             path_offset_z: float, alpha: float) -> None:
     """Replace the camera with a restrained pseudo-3D road scene."""
     rl.draw_rectangle_gradient_v(
       int(rect.x), int(rect.y), int(rect.width), int(rect.height),
       self._color(SCENE_HORIZON, 255 * alpha),
       self._color(SCENE_FOREGROUND, 255 * alpha),
     )
+
+    if path is not None:
+      left, right = self._project_ribbon(rect, path, 5.4, path_offset_z)
+      if len(left) >= 2:
+        road = np.asarray(left + list(reversed(right)), dtype=np.float32)
+        draw_polygon(rect, road, self._color(ROAD_SURFACE, 238 * alpha))
+        return
 
     center_x = rect.x + rect.width * 0.5
     horizon_y = rect.y + rect.height * (0.13 if self._compact else 0.10)
@@ -685,7 +701,7 @@ class IntentOverlay(Widget):
     state = derive_intent_state(model, plan, sm['carState'])
     path, lanes = self._update_geometry(model)
 
-    self._draw_scene_background(rect, alpha)
+    self._draw_scene_background(rect, path, self._path_offset_z, alpha)
     if car_control.latActive:
       self._draw_road_context(rect, lanes, model.laneLineProbs, alpha)
     if car_control.latActive and path is not None:
