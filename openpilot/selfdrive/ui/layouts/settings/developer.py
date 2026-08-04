@@ -99,7 +99,7 @@ class DeveloperLayout(Widget):
 
     self._driving_intent_toggle = toggle_item(
       "Intent HUD",
-      description="Shows future poses, planned stops, controlling leads, and lane-change targets.",
+      description="Shows the planned path, road boundaries, stops, radar leads, and lane-change targets.",
       initial_state=self._params.get_bool("DrivingIntentEnabled"),
       callback=self._on_enable_driving_intent,
     )

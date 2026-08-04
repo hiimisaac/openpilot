@@ -123,27 +123,6 @@ def test_e2e_stop_distance_follows_curved_model_path_length():
   assert np.isclose(state.stop.distance, 7.625)
 
 
-def test_future_poses_follow_model_time_and_unwrap_yaw():
-  model = empty_model()
-  model.position = message(
-    t=[0.0, 0.5, 1.5, 2.5, 3.5],
-    x=[0.0, 2.0, 7.0, 13.0, 20.0],
-    y=[0.0, 0.1, 0.6, 1.5, 2.8],
-    z=[0.0] * 5,
-  )
-  model.orientation = message(
-    t=[0.0, 0.5, 1.5, 2.5, 3.5],
-    z=[3.0, 3.1, -3.0, -2.9, -2.8],
-  )
-
-  state = derive_intent_state(model, empty_plan(), empty_car_state())
-
-  assert [pose.t for pose in state.future_poses] == [1.0, 2.0, 3.0]
-  assert np.isclose(state.future_poses[0].x, 4.5)
-  assert np.isclose(state.future_poses[1].y, 1.05)
-  assert state.future_poses[0].yaw > 3.0
-
-
 def test_pre_lane_change_marks_matching_blindspot_blocked():
   model = empty_model()
   model.meta = message(laneChangeState='preLaneChange', laneChangeDirection='left')
@@ -178,15 +157,6 @@ def test_controlling_lead_matches_longitudinal_source():
     state = derive_intent_state(empty_model(), plan, empty_car_state())
 
     assert state.controlling_lead_index == lead_index
-
-
-def test_intent_card_does_not_claim_inactive_longitudinal_control():
-  plan = empty_plan()
-  plan.longitudinalPlanSource = 'lead0'
-  state = derive_intent_state(empty_model(), plan, empty_car_state())
-
-  assert IntentOverlay._intent_card_text(state, lateral_active=True, longitudinal_active=False) is None
-  assert IntentOverlay._intent_card_text(state, lateral_active=True, longitudinal_active=True) == "FOLLOWING VEHICLE"
 
 
 def test_world_scene_uses_one_chase_view_independent_of_camera_calibration():
@@ -396,12 +366,7 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
        patch.object(intent_overlay.rl, 'draw_triangle_fan') as draw_vehicle, \
        patch.object(intent_overlay.rl, 'draw_ellipse'), \
        patch.object(intent_overlay.rl, 'draw_rectangle_gradient_v'), \
-       patch.object(intent_overlay.rl, 'draw_rectangle_rounded'), \
-       patch.object(intent_overlay.rl, 'draw_rectangle_rounded_lines_ex'), \
        patch.object(intent_overlay.rl, 'draw_circle'), \
-       patch.object(intent_overlay.rl, 'draw_text_ex'), \
-       patch.object(intent_overlay.gui_app, 'font', return_value=message()), \
-       patch.object(intent_overlay, 'measure_text_cached', return_value=rl.Vector2(240.0, 34.0)), \
        patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
     state = overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
                                   longitudinal_control=True, path_offset_z=1.0)
@@ -409,7 +374,7 @@ def test_overlay_draws_trajectory_lane_target_stop_and_controlling_lead():
   assert state is not None
   assert draw_polygon.called
   assert draw_line.call_count >= 10
-  assert draw_vehicle.call_count == 7  # three future ego footprints plus two lead body/windows
+  assert draw_vehicle.call_count == 4  # two lead body/windows; no repeated future-car stamps
   assert any(call.args[3].r == intent_overlay.BLOCKED_RED.r for call in draw_line.call_args_list)
 
 
@@ -462,7 +427,7 @@ def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
   assert draw_vehicle.call_args.args[2].width < 70.0
 
 
-def test_compact_scene_keeps_path_bold_without_wireframe_clutter():
+def test_compact_scene_keeps_path_restrained_without_wireframe_clutter():
   times = [0.0, 1.0, 2.0, 3.0, 4.0]
   model = empty_model()
   model.position = message(t=times, x=[1.0, 9.0, 18.0, 28.0, 40.0],
@@ -503,7 +468,7 @@ def test_compact_scene_keeps_path_bold_without_wireframe_clutter():
 
   trajectory_gradient = next(call.kwargs['gradient'] for call in draw_polygon.call_args_list if 'gradient' in call.kwargs)
   assert draw_line.call_count <= 24
-  assert max(color.a for color in trajectory_gradient.colors) >= 120
+  assert 110 <= max(color.a for color in trajectory_gradient.colors) <= 130
   lane_alphas = [
     call.args[3].a for call in draw_line.call_args_list
     if call.args[3].r == intent_overlay.ROAD_MARKING.r and call.args[3].g == intent_overlay.ROAD_MARKING.g
@@ -518,7 +483,7 @@ def test_compact_scene_keeps_path_bold_without_wireframe_clutter():
   ]
   assert lane_alphas and max(lane_alphas) <= 64
   assert edge_alphas and max(edge_alphas) <= 86
-  assert corridor_alphas and max(corridor_alphas) >= 180
+  assert corridor_alphas and max(corridor_alphas) >= 150
   draw_scene.assert_called_once()
 
 
@@ -565,14 +530,14 @@ def test_compact_intent_hud_replaces_camera_with_scene_and_anchored_ego():
   assert draw_scene.call_args.args[-2].a == 255
   assert draw_scene.call_args.args[-1].a == 255
   load_texture.assert_called_once_with("images/intent_ego_vehicle.png", alpha_premultiply=True)
-  assert draw_ego.call_count == 4  # three model future poses and the anchored ego
+  draw_ego.assert_called_once()
   ego_rect = draw_ego.call_args_list[-1].args[2]
   assert np.isclose(ego_rect.x, rect.x + rect.width * 0.5)
   assert ego_rect.y > rect.y + rect.height * 0.7
   assert draw_ego.call_args_list[-1].args[4] == 0.0
 
 
-def test_big_overlay_draws_single_smoothly_animated_path_pulse():
+def test_big_overlay_keeps_scene_stable_without_gimmicky_path_pulse():
   times = [0.0, 1.0, 2.0, 3.0, 4.0]
   model = empty_model()
   model.position = message(t=times, x=[1.0, 9.0, 18.0, 28.0, 40.0],
@@ -603,7 +568,7 @@ def test_big_overlay_draws_single_smoothly_animated_path_pulse():
       overlay.render_intent(rl.Rectangle(0, 0, 400, 220), sm, enabled=True,
                             longitudinal_control=False, path_offset_z=1.0)
     frames.append([call.args[1].tolist() for call in draw_polygon.call_args_list[-2:]])
-    assert draw_shape.call_count == 3  # future poses are quiet filled footprints, not chevrons
+    assert draw_shape.call_count == 0
 
   assert len(frames[0]) == 2
-  assert frames[0] != frames[1]
+  assert frames[0] == frames[1]
