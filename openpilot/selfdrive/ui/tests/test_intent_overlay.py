@@ -465,6 +465,25 @@ def test_radar_lead_grows_decisively_as_distance_closes():
   assert rendered_width(8.0) > rendered_width(80.0) * 2.0
 
 
+def test_radar_lead_converts_radar_lateral_sign_to_scene_coordinates():
+  overlay = IntentOverlay(compact=True)
+  overlay._ego_texture = message(width=768, height=768)
+  model = empty_model()
+  model.position = message(x=[1.0, 20.0, 40.0], y=[0.0, 1.0, 2.0], z=[0.0] * 3)
+  radar_state = message(
+    leadOne=message(present=True, dRel=20.0, yRel=1.0, vRel=-1.0),
+    leadTwo=message(present=False),
+  )
+  rect = rl.Rectangle(0, 0, 400, 220)
+
+  with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle:
+    overlay._draw_lead(rect, model, radar_state, 0, 0.0, 1.0, controlling=True)
+
+  expected_x = overlay._project(rect, (20.0, -1.0, 0.0))[0]
+  assert np.isclose(draw_vehicle.call_args.args[2].x, expected_x)
+  assert expected_x > rect.width * 0.5
+
+
 def test_lane_change_branch_splits_spatially_toward_adjacent_lane():
   x = np.asarray([1.0, 5.0, 12.0, 25.0, 45.0])
   path = np.column_stack((x, np.zeros_like(x), np.zeros_like(x)))

@@ -32,7 +32,7 @@ SCENE_NEAR_LATERAL_SCALE = 0.11
 SCENE_FAR_LATERAL_SCALE = 0.012
 VEHICLE_SPRITE_VISIBLE_BOTTOM = 641.0 / 768.0
 VEHICLE_SPRITE_VISIBLE_WIDTH = (606.0 - 161.0) / 768.0
-LEAD_VEHICLE_WIDTH_METERS = 1.85
+LEAD_VEHICLE_WIDTH_METERS = 1.55
 
 
 def draw_solid_ribbon(points: list[tuple[float, float]], color: rl.Color) -> None:
@@ -675,7 +675,8 @@ class IntentOverlay(Widget):
       return
     lead = leads[lead_index]
     z = self._path_height(model, float(lead.dRel))
-    point = self._project(rect, (float(lead.dRel), float(-lead.yRel), z + path_offset_z))
+    # RadarState.yRel uses the opposite lateral sign from model coordinates.
+    point = self._project(rect, (float(lead.dRel), -float(lead.yRel), z + path_offset_z))
     if point is None:
       return
 
