@@ -238,7 +238,7 @@ def test_world_scene_road_surface_follows_curved_model_path():
                           longitudinal_control=False, path_offset_z=1.0)
 
   road_call = draw_polygon.call_args_list[0]
-  assert 'gradient' not in road_call.kwargs
+  assert 'gradient' in road_call.kwargs
   road = np.asarray(road_call.args[1])
   half = len(road) // 2
   near_center_x = (road[0, 0] + road[-1, 0]) * 0.5
@@ -455,7 +455,12 @@ def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
                     intent_overlay.VEHICLE_SPRITE_VISIBLE_WIDTH)
   assert np.isclose(vehicle_rect.width, expected_width)
   assert np.isclose(visible_bottom, ground_y)
-  draw_ground_contact.assert_not_called()
+  draw_ground_contact.assert_called_once()
+  shadow_x, shadow_y, shadow_radius_x, shadow_radius_y = draw_ground_contact.call_args.args[:4]
+  assert np.isclose(shadow_x, vehicle_rect.x)
+  assert ground_y - vehicle_rect.height * 0.03 <= shadow_y <= ground_y
+  assert shadow_radius_x <= vehicle_rect.width * intent_overlay.VEHICLE_SPRITE_VISIBLE_WIDTH * 0.4
+  assert shadow_radius_y < shadow_radius_x * 0.25
 
 
 def test_radar_lead_grows_decisively_as_distance_closes():
@@ -490,7 +495,8 @@ def test_radar_lead_converts_radar_lateral_sign_to_scene_coordinates():
   )
   rect = rl.Rectangle(0, 0, 400, 220)
 
-  with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle:
+  with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle, \
+       patch.object(intent_overlay.rl, 'draw_ellipse'):
     overlay._draw_lead(rect, model, radar_state, 0, 0.0, 1.0, controlling=True)
 
   expected_x = overlay._project(rect, (20.0, -1.0, 0.0))[0]
@@ -515,7 +521,8 @@ def test_controlling_radar_lead_visible_body_stays_inside_lane_boundaries():
   )
   rect = rl.Rectangle(0, 0, 400, 220)
 
-  with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle:
+  with patch.object(intent_overlay.rl, 'draw_texture_pro') as draw_vehicle, \
+       patch.object(intent_overlay.rl, 'draw_ellipse'):
     overlay._draw_lead(rect, model, radar_state, 0, 0.0, 1.0, controlling=True)
 
   vehicle_rect = draw_vehicle.call_args.args[2]
@@ -610,16 +617,21 @@ def test_compact_scene_uses_bold_lane_geometry_and_solid_planned_path():
     call.args[3].a for call in draw_line.call_args_list
     if call.args[3].r == intent_overlay.ROAD_MARKING.r and call.args[3].g == intent_overlay.ROAD_MARKING.g
   ]
+  lane_widths = [
+    call.args[2] for call in draw_line.call_args_list
+    if call.args[3].r == intent_overlay.ROAD_MARKING.r and call.args[3].g == intent_overlay.ROAD_MARKING.g
+  ]
   edge_alphas = [
     call.args[3].a for call in draw_line.call_args_list
     if call.args[3].r == intent_overlay.ROAD_EDGE.r and call.args[3].g == intent_overlay.ROAD_EDGE.g
   ]
-  assert lane_alphas and max(lane_alphas) >= 130
-  assert edge_alphas and max(edge_alphas) >= 80
+  assert lane_alphas and max(lane_alphas) >= 115
+  assert lane_widths and max(lane_widths) > min(lane_widths) * 2.0
+  assert edge_alphas and max(edge_alphas) >= 70
   draw_scene.assert_called_once()
 
 
-def test_compact_intent_hud_replaces_camera_with_scene_and_anchored_ego():
+def test_compact_intent_hud_layers_translucent_scene_and_anchored_ego():
   times = [0.0, 1.0, 2.0, 3.0, 4.0]
   model = empty_model()
   model.position = message(t=times, x=[1.0, 9.0, 18.0, 28.0, 40.0],
@@ -660,8 +672,8 @@ def test_compact_intent_hud_replaces_camera_with_scene_and_anchored_ego():
     overlay.render_intent(rect, sm, enabled=True, longitudinal_control=False, path_offset_z=1.0)
 
   draw_scene.assert_called_once()
-  assert draw_scene.call_args.args[-2].a == 255
-  assert draw_scene.call_args.args[-1].a == 255
+  assert draw_scene.call_args.args[-2].a == intent_overlay.SCENE_OVERLAY_ALPHA
+  assert draw_scene.call_args.args[-1].a == intent_overlay.SCENE_OVERLAY_ALPHA
   load_texture.assert_called_once_with("images/intent_ego_vehicle.png", alpha_premultiply=True)
   draw_ego.assert_called_once()
   ego_rect = draw_ego.call_args_list[-1].args[2]

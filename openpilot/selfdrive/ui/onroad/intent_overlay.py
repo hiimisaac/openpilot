@@ -23,6 +23,10 @@ ROAD_EDGE = rl.Color(108, 117, 126, 255)
 SCENE_HORIZON = rl.Color(42, 47, 53, 255)
 SCENE_FOREGROUND = rl.Color(17, 20, 24, 255)
 ROAD_SURFACE = rl.Color(49, 54, 60, 255)
+ROAD_SURFACE_NEAR = rl.Color(34, 38, 43, 255)
+ROAD_SURFACE_FAR = rl.Color(65, 70, 76, 255)
+SHOULDER_NEAR = rl.Color(25, 29, 34, 255)
+SHOULDER_FAR = rl.Color(48, 53, 59, 255)
 UI_BLACK = rl.Color(0, 0, 0, 255)
 UI_WHITE = rl.Color(255, 255, 255, 255)
 BLOCKED_RED = rl.Color(255, 75, 85, 255)
@@ -33,6 +37,9 @@ SCENE_FAR_LATERAL_SCALE = 0.012
 VEHICLE_SPRITE_VISIBLE_BOTTOM = 641.0 / 768.0
 VEHICLE_SPRITE_VISIBLE_WIDTH = (606.0 - 161.0) / 768.0
 LEAD_VEHICLE_WIDTH_METERS = 1.55
+SCENE_OVERLAY_ALPHA = 202
+SHOULDER_OVERLAY_ALPHA = 76
+ROAD_OVERLAY_ALPHA = 64
 
 
 def draw_solid_ribbon(points: list[tuple[float, float]], color: rl.Color) -> None:
@@ -232,6 +239,11 @@ class IntentOverlay(Widget):
       (SCENE_NEAR_LATERAL_SCALE - SCENE_FAR_LATERAL_SCALE) * (1.0 - progress)
     )
 
+  def _screen_depth(self, rect: rl.Rectangle, screen_y: float) -> float:
+    near_y = rect.y + rect.height * 0.98
+    horizon_y = rect.y + rect.height * (0.18 if self._compact else 0.15)
+    return float(np.clip((screen_y - horizon_y) / max(near_y - horizon_y, 1.0), 0.0, 1.0))
+
   def _project(self, rect: rl.Rectangle, point: tuple[float, float, float]) -> tuple[float, float] | None:
     forward, lateral, _height = point
     if not np.all(np.isfinite(point)) or not 0.0 <= forward <= MAX_DRAW_DISTANCE:
@@ -373,10 +385,11 @@ class IntentOverlay(Widget):
         if confidence < 0.2:
           continue
         points = self._project_line(rect, edge)
-        width = 2.8 if self._compact else 7.0
         for start, end in zip(points[:-1], points[1:], strict=True):
+          depth = self._screen_depth(rect, (start[1] + end[1]) * 0.5)
+          width = float(np.interp(depth, (0.0, 1.0), (0.7, 3.2) if self._compact else (1.5, 8.0)))
           rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
-                          self._color(ROAD_EDGE, 110 * confidence * alpha))
+                          self._color(ROAD_EDGE, 110 * confidence * alpha * (0.45 + 0.55 * depth)))
 
     if lanes is not None:
       for index in range(len(lanes)):
@@ -387,11 +400,14 @@ class IntentOverlay(Widget):
           continue
         points = self._project_line(rect, lanes[index])
         primary = index in (1, 2)
-        width = (4.0 if primary else 3.0) if self._compact else (14.0 if primary else 9.0)
+        near_width = (5.2 if primary else 3.6) if self._compact else (16.0 if primary else 10.0)
+        far_width = (1.0 if primary else 0.7) if self._compact else (2.2 if primary else 1.4)
         line_alpha = 150 if primary else 82
         for start, end in zip(points[:-1], points[1:], strict=True):
+          depth = self._screen_depth(rect, (start[1] + end[1]) * 0.5)
+          width = float(np.interp(depth, (0.0, 1.0), (far_width, near_width)))
           rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
-                          self._color(ROAD_MARKING, line_alpha * confidence * alpha))
+                          self._color(ROAD_MARKING, line_alpha * confidence * alpha * (0.52 + 0.48 * depth)))
 
   def _draw_blindspot_guard(self, rect: rl.Rectangle, car_state, alpha: float) -> None:
     """Blind-spot messages have no object position, so only mark the affected side."""
@@ -411,19 +427,37 @@ class IntentOverlay(Widget):
     """Replace the camera with a restrained pseudo-3D road scene."""
     rl.draw_rectangle_gradient_v(
       int(rect.x), int(rect.y), int(rect.width), int(rect.height),
-      self._color(SCENE_HORIZON, 255 * alpha),
-      self._color(SCENE_FOREGROUND, 255 * alpha),
+      # Preserve a restrained monochrome trace of the live camera underneath.
+      # Its real optic flow gives the otherwise schematic world physical motion.
+      self._color(SCENE_HORIZON, SCENE_OVERLAY_ALPHA * alpha),
+      self._color(SCENE_FOREGROUND, SCENE_OVERLAY_ALPHA * alpha),
     )
 
     if path is not None:
       shoulder_left, shoulder_right = self._project_ribbon(rect, path, 7.2, path_offset_z)
       if len(shoulder_left) >= 2:
         shoulder = np.asarray(shoulder_left + list(reversed(shoulder_right)), dtype=np.float32)
-        draw_polygon(rect, shoulder, self._color(rl.Color(36, 41, 47, 255), 246 * alpha))
+        shoulder_gradient = Gradient(
+          start=(0.0, 1.0), end=(0.0, 0.0),
+          colors=[
+            self._color(SHOULDER_NEAR, SHOULDER_OVERLAY_ALPHA * alpha),
+            self._color(SHOULDER_FAR, SHOULDER_OVERLAY_ALPHA * alpha),
+          ],
+          stops=[0.0, 1.0],
+        )
+        draw_polygon(rect, shoulder, gradient=shoulder_gradient)
       left, right = self._project_ribbon(rect, path, 5.4, path_offset_z)
       if len(left) >= 2:
         road = np.asarray(left + list(reversed(right)), dtype=np.float32)
-        draw_polygon(rect, road, self._color(ROAD_SURFACE, 244 * alpha))
+        road_gradient = Gradient(
+          start=(0.0, 1.0), end=(0.0, 0.0),
+          colors=[
+            self._color(ROAD_SURFACE_NEAR, ROAD_OVERLAY_ALPHA * alpha),
+            self._color(ROAD_SURFACE_FAR, ROAD_OVERLAY_ALPHA * alpha),
+          ],
+          stops=[0.0, 1.0],
+        )
+        draw_polygon(rect, road, gradient=road_gradient)
         return
 
     center_x = rect.x + rect.width * 0.5
@@ -434,7 +468,7 @@ class IntentOverlay(Widget):
       (rect.x + rect.width * 1.06, rect.y + rect.height),
       (rect.x - rect.width * 0.06, rect.y + rect.height),
     )
-    rl.draw_triangle_fan(road, len(road), self._color(ROAD_SURFACE, 238 * alpha))
+    rl.draw_triangle_fan(road, len(road), self._color(ROAD_SURFACE, 100 * alpha))
 
   def _ensure_vehicle_texture(self) -> bool:
     if self._ego_texture is None and rl.is_window_ready():
@@ -708,6 +742,12 @@ class IntentOverlay(Widget):
     x, ground_y = smoothed
     visible_bottom_offset = (VEHICLE_SPRITE_VISIBLE_BOTTOM - 0.5) * sprite_size
     sprite_center_y = ground_y - visible_bottom_offset
+    visible_width = sprite_size * VEHICLE_SPRITE_VISIBLE_WIDTH
+    rl.draw_ellipse(
+      int(x), int(ground_y - sprite_size * 0.012),
+      visible_width * 0.37, max(1.0, visible_width * 0.065),
+      self._color(UI_BLACK, (92 if controlling else 58) * alpha),
+    )
     top, middle, bottom = ground_y - size * 1.18, ground_y - size * 0.55, ground_y + size * 0.04
     body = (
       (x - size * 0.52, bottom),
