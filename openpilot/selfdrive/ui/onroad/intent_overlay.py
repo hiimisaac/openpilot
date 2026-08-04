@@ -31,6 +31,8 @@ SCENE_DEPTH_METERS = 30.0
 SCENE_NEAR_LATERAL_SCALE = 0.11
 SCENE_FAR_LATERAL_SCALE = 0.012
 VEHICLE_SPRITE_VISIBLE_BOTTOM = 641.0 / 768.0
+VEHICLE_SPRITE_VISIBLE_WIDTH = (606.0 - 161.0) / 768.0
+LEAD_VEHICLE_WIDTH_METERS = 1.85
 
 
 def draw_solid_ribbon(points: list[tuple[float, float]], color: rl.Color) -> None:
@@ -222,6 +224,14 @@ class IntentOverlay(Widget):
   def _color(color: rl.Color, alpha: float) -> rl.Color:
     return rl.Color(color.r, color.g, color.b, int(np.clip(alpha, 0.0, 255.0)))
 
+  @staticmethod
+  def _lateral_scale(rect: rl.Rectangle, forward: float) -> float:
+    progress = 1.0 - math.exp(-forward / SCENE_DEPTH_METERS)
+    return rect.width * (
+      SCENE_FAR_LATERAL_SCALE +
+      (SCENE_NEAR_LATERAL_SCALE - SCENE_FAR_LATERAL_SCALE) * (1.0 - progress)
+    )
+
   def _project(self, rect: rl.Rectangle, point: tuple[float, float, float]) -> tuple[float, float] | None:
     forward, lateral, _height = point
     if not np.all(np.isfinite(point)) or not 0.0 <= forward <= MAX_DRAW_DISTANCE:
@@ -232,10 +242,7 @@ class IntentOverlay(Widget):
     horizon_y = rect.y + rect.height * (0.18 if self._compact else 0.15)
     y = near_y + (horizon_y - near_y) * progress
 
-    lateral_scale = rect.width * (
-      SCENE_FAR_LATERAL_SCALE +
-      (SCENE_NEAR_LATERAL_SCALE - SCENE_FAR_LATERAL_SCALE) * (1.0 - progress)
-    )
+    lateral_scale = self._lateral_scale(rect, forward)
     # openpilot vehicle coordinates use positive lateral to the left.
     x = rect.x + rect.width * 0.5 - lateral * lateral_scale
     return float(x), float(y)
@@ -680,12 +687,17 @@ class IntentOverlay(Widget):
       smoothed += self._geometry_alpha * (target - smoothed)
     self._smoothed_leads[lead_index] = smoothed
 
-    # Perspective position already moves the lead down-screen as it approaches;
-    # exponential sizing makes that depth change equally obvious at a glance.
-    far_size, near_size = ((7.0, 50.0) if self._compact else (18.0, 128.0))
-    size = float(far_size + (near_size - far_size) * math.exp(-max(float(lead.dRel), 0.0) / 34.0))
+    # Match the lead's visible width to the same perspective scale used by the
+    # road and lane geometry. Account for transparent padding in the sprite.
+    perspective_width = LEAD_VEHICLE_WIDTH_METERS * self._lateral_scale(rect, max(float(lead.dRel), 0.0))
+    ego_size = min(
+      rect.width * (0.34 if self._compact else 0.27),
+      rect.height * (0.68 if self._compact else 0.48),
+    )
+    sprite_size = float(np.clip(perspective_width / VEHICLE_SPRITE_VISIBLE_WIDTH,
+                                7.0 if self._compact else 18.0, ego_size * 0.92))
+    size = sprite_size / 1.55
     x, ground_y = smoothed
-    sprite_size = size * 1.55
     visible_bottom_offset = (VEHICLE_SPRITE_VISIBLE_BOTTOM - 0.5) * sprite_size
     sprite_center_y = ground_y - visible_bottom_offset
     top, middle, bottom = ground_y - size * 1.18, ground_y - size * 0.55, ground_y + size * 0.04

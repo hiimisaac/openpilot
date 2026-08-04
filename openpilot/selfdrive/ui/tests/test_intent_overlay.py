@@ -437,7 +437,9 @@ def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
   vehicle_rect = draw_vehicle.call_args.args[2]
   ground_y = overlay._project(rect, (20.0, 0.0, 0.0))[1]
   visible_bottom = vehicle_rect.y + (intent_overlay.VEHICLE_SPRITE_VISIBLE_BOTTOM - 0.5) * vehicle_rect.height
-  assert vehicle_rect.width < 70.0
+  expected_width = (intent_overlay.LEAD_VEHICLE_WIDTH_METERS * overlay._lateral_scale(rect, 20.0) /
+                    intent_overlay.VEHICLE_SPRITE_VISIBLE_WIDTH)
+  assert np.isclose(vehicle_rect.width, expected_width)
   assert np.isclose(visible_bottom, ground_y)
   draw_ground_contact.assert_not_called()
 
