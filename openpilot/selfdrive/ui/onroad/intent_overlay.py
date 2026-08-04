@@ -32,6 +32,12 @@ SCENE_NEAR_LATERAL_SCALE = 0.11
 SCENE_FAR_LATERAL_SCALE = 0.012
 
 
+def draw_solid_ribbon(points: list[tuple[float, float]], color: rl.Color) -> None:
+  if rl.is_window_ready():
+    vertices = [rl.Vector2(*point) for point in points]
+    rl.draw_triangle_strip(vertices, len(vertices), color)
+
+
 class StopKind(StrEnum):
   CONTROL = "control"
   MODEL = "model"
@@ -353,23 +359,25 @@ class IntentOverlay(Widget):
         if confidence < 0.2:
           continue
         points = self._project_line(rect, edge)
-        width = 1.0 if self._compact else 2.5
+        width = 2.8 if self._compact else 7.0
         for start, end in zip(points[:-1], points[1:], strict=True):
           rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
-                          self._color(ROAD_EDGE, 72 * confidence * alpha))
+                          self._color(ROAD_EDGE, 110 * confidence * alpha))
 
     if lanes is not None:
-      for index in (1, 2):
+      for index in range(len(lanes)):
         if index >= len(lanes) or index >= len(lane_probs):
           continue
         confidence = float(np.clip(lane_probs[index], 0.0, 1.0))
         if confidence < 0.45:
           continue
         points = self._project_line(rect, lanes[index])
-        width = 0.8 if self._compact else 2.0
+        primary = index in (1, 2)
+        width = (4.0 if primary else 3.0) if self._compact else (14.0 if primary else 9.0)
+        line_alpha = 178 if primary else 112
         for start, end in zip(points[:-1], points[1:], strict=True):
           rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), width,
-                          self._color(ROAD_MARKING, 48 * confidence * alpha))
+                          self._color(ROAD_MARKING, line_alpha * confidence * alpha))
 
   def _draw_blindspot_guard(self, rect: rl.Rectangle, car_state, alpha: float) -> None:
     """Blind-spot messages have no object position, so only mark the affected side."""
@@ -477,26 +485,18 @@ class IntentOverlay(Widget):
     self._draw_vehicle_lights(center_x, center_y, size, rotation, car_state, braking, alpha)
 
   def _draw_trajectory(self, rect: rl.Rectangle, path: np.ndarray, path_offset_z: float, alpha: float) -> None:
-    half_width = 1.38 if self._compact else 1.62
+    # A solid vehicle-width ribbon reads as one committed path, instead of a
+    # second pair of lane boundaries.
+    half_width = 0.82 if self._compact else 1.0
     left, right = self._project_ribbon(rect, path, half_width, path_offset_z)
     if len(left) < 2:
       return
 
-    polygon = np.asarray(left + list(reversed(right)), dtype=np.float32)
-    gradient = Gradient(
-      start=(0.0, 1.0),
-      end=(0.0, 0.0),
-      colors=[
-        self._color(TESLA_BLUE, 118 * alpha),
-        self._color(TESLA_BLUE, 76 * alpha),
-        self._color(PATH_HIGHLIGHT, 12 * alpha),
-      ],
-      stops=[0.0, 0.58, 1.0],
-    )
-    draw_polygon(rect, polygon, gradient=gradient)
+    strip = [point for pair in zip(right, left, strict=True) for point in pair]
+    draw_solid_ribbon(strip, self._color(TESLA_BLUE, 225 * alpha))
 
-    rail_color = self._color(PATH_HIGHLIGHT, 158 * alpha)
-    rail_width = 1.1 if self._compact else 3.0
+    rail_color = self._color(PATH_HIGHLIGHT, 232 * alpha)
+    rail_width = 1.5 if self._compact else 4.0
     for boundary in (left, right):
       for start, end in zip(boundary[:-1], boundary[1:], strict=True):
         rl.draw_line_ex(rl.Vector2(*start), rl.Vector2(*end), rail_width, rail_color)

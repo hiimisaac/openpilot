@@ -181,13 +181,14 @@ def test_world_scene_uses_one_chase_view_independent_of_camera_calibration():
     overlay = IntentOverlay(compact=False)
     overlay.set_transform(transform)
     overlay._alpha_filter.x = 1.0
-    with patch.object(intent_overlay, 'draw_polygon') as draw_polygon, \
+    with patch.object(intent_overlay, 'draw_polygon'), \
+         patch.object(intent_overlay, 'draw_solid_ribbon') as draw_path_ribbon, \
          patch.object(intent_overlay.rl, 'draw_line_ex'), \
          patch.object(intent_overlay.rl, 'draw_triangle_fan'), \
          patch.object(intent_overlay.rl, 'draw_rectangle_gradient_v'), \
          patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
       overlay.render_intent(rect, sm, enabled=True, longitudinal_control=False, path_offset_z=1.0)
-    return np.asarray(next(call.args[1] for call in draw_polygon.call_args_list if 'gradient' in call.kwargs))
+    return np.asarray(draw_path_ribbon.call_args.args[0])
 
   first = rendered_path(np.array([
     [200.0, 20.0, 0.0],
@@ -201,11 +202,10 @@ def test_world_scene_uses_one_chase_view_independent_of_camera_calibration():
   ]))
 
   assert np.allclose(first, second)
-  half = len(first) // 2
-  near_width = np.linalg.norm(first[0] - first[-1])
-  far_width = np.linalg.norm(first[half - 1] - first[half])
+  near_width = np.linalg.norm(first[0] - first[1])
+  far_width = np.linalg.norm(first[-2] - first[-1])
   assert near_width > far_width * 1.5
-  assert first[0, 1] > first[half - 1, 1]
+  assert first[0, 1] > first[-2, 1]
 
 
 def test_world_scene_road_surface_follows_curved_model_path():
@@ -427,7 +427,7 @@ def test_radar_lead_uses_smaller_rendered_vehicle_when_texture_is_available():
   assert draw_vehicle.call_args.args[2].width < 70.0
 
 
-def test_compact_scene_keeps_path_restrained_without_wireframe_clutter():
+def test_compact_scene_uses_bold_lane_geometry_and_solid_planned_path():
   times = [0.0, 1.0, 2.0, 3.0, 4.0]
   model = empty_model()
   model.position = message(t=times, x=[1.0, 9.0, 18.0, 28.0, 40.0],
@@ -458,17 +458,18 @@ def test_compact_scene_keeps_path_restrained_without_wireframe_clutter():
   ]))
   overlay._alpha_filter.x = 1.0
 
-  with patch.object(intent_overlay, 'draw_polygon') as draw_polygon, \
+  with patch.object(intent_overlay, 'draw_polygon'), \
        patch.object(intent_overlay.rl, 'draw_line_ex') as draw_line, \
+       patch.object(intent_overlay, 'draw_solid_ribbon') as draw_path_ribbon, \
        patch.object(intent_overlay.rl, 'draw_triangle_fan'), \
        patch.object(intent_overlay.rl, 'draw_rectangle_gradient_v') as draw_scene, \
        patch.object(intent_overlay.rl, 'get_time', return_value=0.0):
     overlay.render_intent(rl.Rectangle(100, 50, 400, 220), sm, enabled=True,
                           longitudinal_control=False, path_offset_z=1.0)
 
-  trajectory_gradient = next(call.kwargs['gradient'] for call in draw_polygon.call_args_list if 'gradient' in call.kwargs)
-  assert draw_line.call_count <= 24
-  assert 110 <= max(color.a for color in trajectory_gradient.colors) <= 130
+  assert draw_line.call_count <= 32
+  draw_path_ribbon.assert_called_once()
+  assert draw_path_ribbon.call_args.args[1].a >= 220
   lane_alphas = [
     call.args[3].a for call in draw_line.call_args_list
     if call.args[3].r == intent_overlay.ROAD_MARKING.r and call.args[3].g == intent_overlay.ROAD_MARKING.g
@@ -481,9 +482,9 @@ def test_compact_scene_keeps_path_restrained_without_wireframe_clutter():
     call.args[3].a for call in draw_line.call_args_list
     if call.args[3].r == intent_overlay.ROAD_EDGE.r and call.args[3].g == intent_overlay.ROAD_EDGE.g
   ]
-  assert lane_alphas and max(lane_alphas) <= 64
-  assert edge_alphas and max(edge_alphas) <= 86
-  assert corridor_alphas and max(corridor_alphas) >= 150
+  assert lane_alphas and max(lane_alphas) >= 150
+  assert edge_alphas and max(edge_alphas) >= 80
+  assert corridor_alphas and max(corridor_alphas) >= 220
   draw_scene.assert_called_once()
 
 
@@ -520,6 +521,7 @@ def test_compact_intent_hud_replaces_camera_with_scene_and_anchored_ego():
        patch.object(intent_overlay.rl, 'draw_ellipse'), \
        patch.object(intent_overlay.rl, 'is_window_ready', return_value=True), \
        patch.object(intent_overlay.gui_app, 'texture', return_value=texture) as load_texture, \
+       patch.object(intent_overlay, 'draw_solid_ribbon'), \
        patch.object(intent_overlay, 'draw_polygon'), \
        patch.object(intent_overlay.rl, 'draw_line_ex'), \
        patch.object(intent_overlay.rl, 'draw_triangle_fan'), \
