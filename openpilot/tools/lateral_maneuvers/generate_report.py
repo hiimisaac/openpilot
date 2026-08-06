@@ -150,7 +150,7 @@ def report(platform, route, _description, CP, ID, maneuvers):
       ax[0].legend(prop={'size': 30})
 
       ax[1].grid(linewidth=4)
-      if CP.steerControlType == car.CarParams.SteerControlType.angle:
+      if CP.steerControlType in (car.CarParams.SteerControlType.angle, car.CarParams.SteerControlType.path):
         steer_field, steer_ylabel = 'steeringAngleDeg', 'Steer angle (deg)'
       elif CP.steerControlType == car.CarParams.SteerControlType.curvature:
         steer_field, steer_ylabel = 'curvature', 'Curvature (1/m)'
