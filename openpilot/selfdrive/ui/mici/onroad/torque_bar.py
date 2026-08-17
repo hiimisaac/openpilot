@@ -173,12 +173,12 @@ class TorqueBar(Widget):
     self._steering_control_limit = 0
 
     # Ford CAN FD sends a four-coefficient LMC2 path instead of a scalar
-    # torque/angle request. Its CarController publishes the actual command
+    # torque/angle request. card publishes the CarController's actual command
     # envelope usage plus the PSCM's own limit status for this meter.
     if self._ford_lmc2_meter:
-      actuators_output = ui_state.sm['carOutput'].actuatorsOutput
-      self._steering_control_limit = actuators_output.steeringControlLimit.raw
-      utilization = actuators_output.steeringControlUtilization if car_control.latActive else 0.0
+      lmc2_state = ui_state.sm['fordLmc2ControlState']
+      self._steering_control_limit = lmc2_state.limit.raw
+      utilization = lmc2_state.utilization if car_control.latActive else 0.0
       self._torque_filter.update(np.clip(utilization, -1.0, 1.0))
     # torque line
     elif ui_state.sm['controlsState'].lateralControlState.which() in ('angleState', 'curvatureState'):
@@ -252,14 +252,14 @@ class TorqueBar(Widget):
     # Fade to orange as command utilization approaches its encoding limit. For
     # Ford LMC2, the PSCM's LimitClose/LimitReached report can raise the warning
     # intensity even when no individual polynomial coefficient is saturated.
-    warning_share = max(0, abs(self._torque_filter.x) - 0.75) * 4
     if self._ford_lmc2_meter:
+      warning_share = 0.0
       if self._steering_control_limit == 1:  # LimitClose
-        warning_share = max(warning_share, 0.65)
+        warning_share = 0.65
       elif self._steering_control_limit == 2:  # LimitReached
         warning_share = 1.0
-      elif self._steering_control_limit == 3:  # LimitWithDriverActive
-        warning_share = 0.0
+    else:
+      warning_share = max(0, abs(self._torque_filter.x) - 0.75) * 4
 
     # fade to orange as we approach max torque
     start_color = blend_colors(
