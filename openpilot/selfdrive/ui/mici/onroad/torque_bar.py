@@ -6,6 +6,7 @@ from collections import OrderedDict
 import numpy as np
 import pyray as rl
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY
+from opendbc.car.structs import car
 from openpilot.selfdrive.ui.mici.onroad import blend_colors
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app
@@ -153,6 +154,8 @@ class TorqueBar(Widget):
     self._demo = demo
     self._torque_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
     self._torque_line_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
+    self._ford_lmc2_meter = False
+    self._steering_control_limit = 0
 
   def update_filter(self, value: float):
     """Update the torque filter value (for demo mode)."""
@@ -162,12 +165,26 @@ class TorqueBar(Widget):
     if self._demo:
       return
 
+    car_control = ui_state.sm['carControl']
+    self._ford_lmc2_meter = bool(
+      ui_state.CP and ui_state.CP.brand == "ford" and
+      ui_state.CP.steerControlType == car.CarParams.SteerControlType.path
+    )
+    self._steering_control_limit = 0
+
+    # Ford CAN FD sends a four-coefficient LMC2 path instead of a scalar
+    # torque/angle request. Its CarController publishes the actual command
+    # envelope usage plus the PSCM's own limit status for this meter.
+    if self._ford_lmc2_meter:
+      actuators_output = ui_state.sm['carOutput'].actuatorsOutput
+      self._steering_control_limit = actuators_output.steeringControlLimit.raw
+      utilization = actuators_output.steeringControlUtilization if car_control.latActive else 0.0
+      self._torque_filter.update(np.clip(utilization, -1.0, 1.0))
     # torque line
-    if ui_state.sm['controlsState'].lateralControlState.which() in ('angleState', 'curvatureState'):
+    elif ui_state.sm['controlsState'].lateralControlState.which() in ('angleState', 'curvatureState'):
       controls_state = ui_state.sm['controlsState']
       car_state = ui_state.sm['carState']
       vehicle_parameters = ui_state.sm['vehicleParameters']
-      car_control = ui_state.sm['carControl']
 
       # Include lateral accel error in estimated torque utilization
       actual_lateral_accel = controls_state.curvature * car_state.vEgo ** 2
@@ -232,16 +249,28 @@ class TorqueBar(Widget):
     else:
       end_grad_pt = (cx * (1 - 0.65) + (max(bg_pts[:, 0]) * 0.65)) / rect.width
 
+    # Fade to orange as command utilization approaches its encoding limit. For
+    # Ford LMC2, the PSCM's LimitClose/LimitReached report can raise the warning
+    # intensity even when no individual polynomial coefficient is saturated.
+    warning_share = max(0, abs(self._torque_filter.x) - 0.75) * 4
+    if self._ford_lmc2_meter:
+      if self._steering_control_limit == 1:  # LimitClose
+        warning_share = max(warning_share, 0.65)
+      elif self._steering_control_limit == 2:  # LimitReached
+        warning_share = 1.0
+      elif self._steering_control_limit == 3:  # LimitWithDriverActive
+        warning_share = 0.0
+
     # fade to orange as we approach max torque
     start_color = blend_colors(
       rl.Color(255, 255, 255, int(255 * 0.9 * self._torque_line_alpha_filter.x)),
       rl.Color(255, 200, 0, int(255 * self._torque_line_alpha_filter.x)),  # yellow
-      max(0, abs(self._torque_filter.x) - 0.75) * 4,
+      warning_share,
     )
     end_color = blend_colors(
       rl.Color(255, 255, 255, int(255 * 0.9 * self._torque_line_alpha_filter.x)),
       rl.Color(255, 115, 0, int(255 * self._torque_line_alpha_filter.x)),  # orange
-      max(0, abs(self._torque_filter.x) - 0.75) * 4,
+      warning_share,
     )
 
     if ui_state.status != UIStatus.ENGAGED and not self._demo:
