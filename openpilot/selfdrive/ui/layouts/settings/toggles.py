@@ -22,6 +22,9 @@ DESCRIPTIONS = {
   "MadsEnabled": tr_noop(
     "Use the cruise main button to control steering independently from ACC. When the main switch is on, steering remains active while ACC is off."
   ),
+  "LaneTurnDesire": tr_noop(
+    "With one turn signal on below 19 mph, hint to the driving model to plan a turn in that direction. Blind-spot detection can suppress the hint."
+  ),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, openpilot will follow lead cars closer and be more aggressive with the gas and brake. " +
     "In relaxed mode openpilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
@@ -69,6 +72,12 @@ class TogglesLayout(Widget):
         DESCRIPTIONS["MadsEnabled"],
         "chffr_wheel.png",
         True,
+      ),
+      "LaneTurnDesire": (
+        lambda: tr("Turn Desires"),
+        DESCRIPTIONS["LaneTurnDesire"],
+        "road.png",
+        False,
       ),
       "IsLdwEnabled": (
         lambda: tr("Enable Lane Departure Warnings"),

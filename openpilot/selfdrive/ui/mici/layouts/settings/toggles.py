@@ -46,6 +46,7 @@ class TogglesLayoutMici(NavScroller):
     self._experimental_btn = BigToggle("experimental mode", initial_state=ui_state.params.get_bool("ExperimentalMode"),
                                        toggle_callback=self._on_experimental_mode)
     self._mads_btn = BigParamControl("modular assistive driving system", "MadsEnabled", toggle_callback=restart_needed_callback)
+    lane_turn_desire = BigParamControl("turn desires", "LaneTurnDesire")
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
     ldw_toggle = BigParamControl("lane departure warnings", "IsLdwEnabled")
     always_on_dm_toggle = BigParamControl("always-on driver monitor", "AlwaysOnDM")
@@ -57,6 +58,7 @@ class TogglesLayoutMici(NavScroller):
       self._personality_toggle,
       self._experimental_btn,
       self._mads_btn,
+      lane_turn_desire,
       is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
@@ -69,6 +71,7 @@ class TogglesLayoutMici(NavScroller):
     self._refresh_toggles = (
       ("ExperimentalMode", self._experimental_btn),
       ("MadsEnabled", self._mads_btn),
+      ("LaneTurnDesire", lane_turn_desire),
       ("IsMetric", is_metric_toggle),
       ("IsLdwEnabled", ldw_toggle),
       ("AlwaysOnDM", always_on_dm_toggle),
