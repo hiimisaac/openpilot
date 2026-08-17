@@ -10,7 +10,16 @@ $Cxx.namespace("cereal");
 # DO rename the structs
 # DON'T change the identifier (e.g. @0x81c2f05a394cf4af)
 
-struct CustomReserved0 @0x81c2f05a394cf4af {
+struct FordLmc2ControlState @0x81c2f05a394cf4af {
+  utilization @0 :Float32;  # signed command-envelope usage [-1.0, 1.0]
+  limit @1 :Limit;
+
+  enum Limit {
+    notReached @0;
+    close @1;
+    reached @2;
+    driverActive @3;
+  }
 }
 
 struct CustomReserved1 @0xaedffd8f31e7b55d {

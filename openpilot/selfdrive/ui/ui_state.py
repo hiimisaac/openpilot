@@ -56,6 +56,7 @@ class UIState:
         "gpsLocationExternal",
         "carOutput",
         "carControl",
+        "fordLmc2ControlState",
         "vehicleParameters",
         "testJoystick",
         "rawAudioData",

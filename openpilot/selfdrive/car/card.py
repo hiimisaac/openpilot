@@ -17,6 +17,7 @@ from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallabl
 from opendbc.car.carlog import carlog
 from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
+from opendbc.car.ford.lateral_path_projector import LateralPathCommand, lmc2_control_utilization
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
@@ -26,6 +27,7 @@ from openpilot.selfdrive.car.mads import is_mads_available
 REPLAY = "REPLAY" in os.environ
 
 EventName = log.OnroadEvent.EventName
+FORD_LMC2_LIMIT_NAMES = ("notReached", "close", "reached", "driverActive")
 
 # forward
 carlog.addHandler(ForwardingHandler(cloudlog))
@@ -60,6 +62,19 @@ def can_comm_callbacks(logcan: messaging.SubSocket, sendcan: messaging.PubSocket
   return can_recv, can_send
 
 
+def ford_lmc2_control_state(CP: car.CarParams, ford_car_state, actuators: car.CarControl.Actuators,
+                            lat_active: bool) -> tuple[float, int]:
+  """Build UI-only Ford LMC2 telemetry from the command actually sent and PSCM status."""
+  if CP.brand != "ford" or CP.steerControlType != car.CarParams.SteerControlType.path or not lat_active:
+    return 0.0, 0
+
+  limit = int(getattr(ford_car_state, "lat_ctl_limit", 0))
+  limit = limit if 0 <= limit < len(FORD_LMC2_LIMIT_NAMES) else 0
+  path = actuators.lateralPath
+  command = LateralPathCommand(path.valid, path.pathOffset, path.pathAngle, path.curvature, path.curvatureRate)
+  return lmc2_control_utilization(command, limit), limit
+
+
 class Car:
   CI: CarInterfaceBase
   RI: RadarInterfaceBase
@@ -68,7 +83,7 @@ class Car:
   def __init__(self, CI=None, RI=None) -> None:
     self.can_sock = messaging.sub_sock('can', timeout=20)
     self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents'])
-    self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'radarTracks'])
+    self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'radarTracks', 'fordLmc2ControlState'])
 
     self.can_rcv_cum_timeout_counter = 0
 
@@ -210,6 +225,16 @@ class Car:
     co_send.valid = self.sm.all_checks(['carControl'])
     co_send.carOutput.actuatorsOutput = self.last_actuators_output
     self.pm.send('carOutput', co_send)
+
+    if self.CP.brand == "ford" and self.CP.steerControlType == car.CarParams.SteerControlType.path:
+      utilization, limit = ford_lmc2_control_state(
+        self.CP, self.CI.CS, self.last_actuators_output, self.sm['carControl'].latActive,
+      )
+      lmc2_send = messaging.new_message('fordLmc2ControlState')
+      lmc2_send.valid = co_send.valid
+      lmc2_send.fordLmc2ControlState.utilization = utilization
+      lmc2_send.fordLmc2ControlState.limit = FORD_LMC2_LIMIT_NAMES[limit]
+      self.pm.send('fordLmc2ControlState', lmc2_send)
 
     # kick off controlsd step while we actuate the latest carControl packet
     cs_send = messaging.new_message('carState')
