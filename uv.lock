@@ -719,7 +719,7 @@ requires-dist = [
     { name = "gcc-arm-none-eabi", marker = "extra == 'dev'", git = "https://github.com/commaai/dependencies.git?subdirectory=gcc-arm-none-eabi&rev=release-gcc-arm-none-eabi" },
     { name = "libusb-package" },
     { name = "libusb1" },
-    { name = "opendbc", git = "https://github.com/hiimisaac/opendbc.git?rev=950af823780fd192dcd6a010313ed7023dd78dc0" },
+    { name = "opendbc", git = "https://github.com/hiimisaac/opendbc.git?rev=e1412eacc2446bd08d27e70595a6e3abacf6de6b" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-mock", marker = "extra == 'dev'" },
     { name = "pytest-timeout", marker = "extra == 'dev'" },
