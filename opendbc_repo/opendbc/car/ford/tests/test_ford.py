@@ -1,0 +1,258 @@
+import math
+import random
+from types import SimpleNamespace
+import unittest
+
+from opendbc.car.structs import CarControl, CarParams
+from opendbc.car.fw_versions import build_fw_dict
+from opendbc.car.ford.interface import CarInterface
+from opendbc.car.ford.carcontroller import CarController
+from opendbc.car.ford.lateral_path import LateralPathCommand
+from opendbc.car.ford.values import CAR, DBC, CarControllerParams, FW_QUERY_CONFIG, FW_PATTERN, get_platform_codes
+from opendbc.car.ford.fingerprints import FW_VERSIONS
+from opendbc.testing import fuzzy_test, parameterized
+
+Ecu = CarParams.Ecu
+
+
+ECU_ADDRESSES = {
+  Ecu.eps: 0x730,          # Power Steering Control Module (PSCM)
+  Ecu.abs: 0x760,          # Anti-Lock Brake System (ABS)
+  Ecu.fwdRadar: 0x764,     # Cruise Control Module (CCM)
+  Ecu.fwdCamera: 0x706,    # Image Processing Module A (IPMA)
+  Ecu.engine: 0x7E0,       # Powertrain Control Module (PCM)
+  Ecu.shiftByWire: 0x732,  # Gear Shift Module (GSM)
+  Ecu.debug: 0x7D0,        # Accessory Protocol Interface Module (APIM)
+}
+
+
+ECU_PART_NUMBER = {
+  Ecu.eps: [
+    b"14D003",
+  ],
+  Ecu.abs: [
+    b"2D053",
+  ],
+  Ecu.fwdRadar: [
+    b"14D049",
+  ],
+  Ecu.fwdCamera: [
+    b"14F397",  # Ford Q3
+    b"14H102",  # Ford Q4
+  ],
+}
+
+
+class TestFordFW(unittest.TestCase):
+  def test_canfd_uses_path_control(self):
+    canfd = CarInterface.get_non_essential_params(CAR.FORD_F_150_MK14)
+    non_canfd = CarInterface.get_non_essential_params(CAR.FORD_ESCAPE_MK4)
+
+    assert canfd.steerControlType == CarParams.SteerControlType.path
+    assert non_canfd.steerControlType == CarParams.SteerControlType.angle
+
+  def test_lateral_path_actuator_round_trip(self):
+    actuators = CarControl.Actuators(lateralPath={
+      "pathOffset": 0.3,
+      "pathAngle": -0.2,
+      "curvature": 0.01,
+      "curvatureRate": -0.0004,
+    })
+
+    assert math.isclose(actuators.lateralPath.pathOffset, 0.3, rel_tol=1e-6)
+    assert math.isclose(actuators.lateralPath.pathAngle, -0.2, rel_tol=1e-6)
+    assert math.isclose(actuators.lateralPath.curvature, 0.01, rel_tol=1e-6)
+    assert math.isclose(actuators.lateralPath.curvatureRate, -0.0004, rel_tol=1e-6)
+
+  def test_canfd_controller_consumes_lateral_path_actuator(self):
+    CP = CarInterface.get_non_essential_params(CAR.FORD_F_150_LIGHTNING_MK1)
+    controller = CarController(DBC[CP.carFingerprint], CP)
+    controller.frame = CarControllerParams.STEER_STEP
+
+    class RecordingPathController:
+      def __init__(self):
+        self.path = None
+        self.lat_ctl_limit = None
+
+      def update(self, path, *args, **kwargs):
+        self.path = path
+        self.lat_ctl_limit = kwargs["lat_ctl_limit"]
+        return LateralPathCommand(True, 0.1, 0.2, 0.003, 0.0004)
+
+    path_controller = RecordingPathController()
+    controller.lateral_path_controller = path_controller
+
+    CC = CarControl(latActive=True)
+    CC.actuators.steeringAngleDeg = 10.0
+    CC.actuators.lateralPath.valid = True
+    CC.actuators.lateralPath.pathOffset = 0.4
+    CC.actuators.lateralPath.pathAngle = 0.1
+    CC.actuators.lateralPath.curvature = 0.01
+    CC.actuators.lateralPath.curvatureRate = 0.0002
+    CC.hudControl.leadDistanceBars = 0
+
+    CS = SimpleNamespace(
+      out=SimpleNamespace(
+        cruiseState=SimpleNamespace(available=False, standstill=False),
+        steeringAngleDeg=0.0,
+        steeringPressed=False,
+        steeringTorque=0.0,
+        vEgoRaw=7.0,
+        vEgo=7.0,
+        yawRate=0.0,
+      ),
+      buttons_stock_values={},
+      acc_tja_status_stock_values={"Tja_D_Stat": 0},
+      lkas_status_stock_values={},
+      lat_ctl_limit=2,
+    )
+    controller.lkas_enabled_last = True
+    controller.lead_distance_bars_last = 0
+
+    output, can_sends = controller.update(CC.as_reader(), CS, 0)
+
+    assert path_controller.path is not None
+    assert path_controller.lat_ctl_limit == 2
+    assert math.isclose(path_controller.path.pathOffset, 0.4, rel_tol=1e-6)
+    assert math.isclose(path_controller.path.curvatureRate, 0.0002, rel_tol=1e-6)
+    assert math.isclose(output.lateralPath.pathOffset, 0.1, rel_tol=1e-6)
+    assert math.isclose(output.lateralPath.curvatureRate, 0.0004, rel_tol=1e-6)
+    assert len(can_sends) == 1
+
+  def test_canfd_controller_transfers_changing_spatial_path_out_of_c2(self):
+    CP = CarInterface.get_non_essential_params(CAR.FORD_F_150_LIGHTNING_MK1)
+    controller = CarController(DBC[CP.carFingerprint], CP)
+
+    CC = CarControl(latActive=True)
+    CC.actuators.lateralPath.valid = True
+    CC.actuators.lateralPath.pathOffset = 0.5 * 0.004 * 7.0 ** 2 + 0.0005 * 7.0 ** 3 / 6.0
+    CC.actuators.lateralPath.pathAngle = 0.004 * 7.0 + 0.5 * 0.0005 * 7.0 ** 2
+    CC.actuators.lateralPath.curvature = 0.004
+    CC.actuators.lateralPath.curvatureRate = 0.0005
+    CC.actuators.steeringAngleDeg = math.degrees(controller.VM.get_steer_from_curvature(-0.004, 7.0, 0.0))
+    CC.hudControl.leadDistanceBars = 0
+
+    CS = SimpleNamespace(
+      out=SimpleNamespace(
+        cruiseState=SimpleNamespace(available=False, standstill=False),
+        steeringAngleDeg=0.0,
+        steeringPressed=False,
+        steeringTorque=0.0,
+        vEgoRaw=7.0,
+        vEgo=7.0,
+        yawRate=0.0,
+      ),
+      buttons_stock_values={},
+      acc_tja_status_stock_values={"Tja_D_Stat": 0},
+      lkas_status_stock_values={},
+      lat_ctl_limit=0,
+    )
+    controller.lkas_enabled_last = True
+    controller.lead_distance_bars_last = 0
+
+    output = None
+    for _ in range(30):
+      controller.frame = CarControllerParams.STEER_STEP
+      output, _ = controller.update(CC.as_reader(), CS, 0)
+
+    assert output is not None
+    assert output.lateralPath.curvature < CC.actuators.lateralPath.curvature
+    assert output.lateralPath.pathOffset > 0.0
+    assert output.lateralPath.pathAngle > 0.0
+
+  def test_fw_query_config(self):
+    for (ecu, addr, subaddr) in FW_QUERY_CONFIG.extra_ecus:
+      assert ecu in ECU_ADDRESSES, "Unknown ECU"
+      assert addr == ECU_ADDRESSES[ecu], "ECU address mismatch"
+      assert subaddr is None, "Unexpected ECU subaddress"
+
+  @parameterized("car_model, fw_versions", FW_VERSIONS.items())
+  def test_fw_versions(self, car_model, fw_versions):
+    for (ecu, addr, subaddr), fws in fw_versions.items():
+      assert ecu in ECU_PART_NUMBER, "Unexpected ECU"
+      assert addr == ECU_ADDRESSES[ecu], "ECU address mismatch"
+      assert subaddr is None, "Unexpected ECU subaddress"
+
+      for fw in fws:
+        assert len(fw) == 24, "Expected ECU response to be 24 bytes"
+
+        match = FW_PATTERN.match(fw)
+        assert match is not None, f"Unable to parse FW: {fw!r}"
+        if match:
+          part_number = match.group("part_number")
+          assert part_number in ECU_PART_NUMBER[ecu], f"Unexpected part number for {fw!r}"
+
+        codes = get_platform_codes([fw])
+        assert 1 == len(codes), f"Unable to parse FW: {fw!r}"
+
+  @fuzzy_test(max_examples=100)
+  def test_platform_codes_fuzzy_fw(self, fuzzy):
+    """Ensure function doesn't raise an exception"""
+    get_platform_codes(fuzzy.list(fuzzy.binary))
+
+  def test_platform_codes_spot_check(self):
+    # Asserts basic platform code parsing behavior for a few cases
+    results = get_platform_codes([
+      b"JX6A-14C204-BPL\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      b"NZ6T-14F397-AC\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      b"PJ6T-14H102-ABJ\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      b"LB5A-14C204-EAC\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+    ])
+    assert results == {(b"X6A", b"J"), (b"Z6T", b"N"), (b"J6T", b"P"), (b"B5A", b"L")}
+
+  def test_fuzzy_match(self):
+    for platform, fw_by_addr in FW_VERSIONS.items():
+      # Ensure there's no overlaps in platform codes
+      for _ in range(20):
+        car_fw = []
+        for ecu, fw_versions in fw_by_addr.items():
+          ecu_name, addr, sub_addr = ecu
+          fw = random.choice(fw_versions)
+          car_fw.append(CarParams.CarFw(ecu=ecu_name, fwVersion=fw, address=addr,
+                                        subAddress=0 if sub_addr is None else sub_addr))
+
+        CP = CarParams(carFw=car_fw)
+        matches = FW_QUERY_CONFIG.match_fw_to_car_fuzzy(build_fw_dict(CP.carFw), CP.carVin, FW_VERSIONS)
+        assert matches == {platform}
+
+  def test_match_fw_fuzzy(self):
+    offline_fw = {
+      (Ecu.eps, 0x730, None): [
+        b"L1MC-14D003-AJ\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        b"L1MC-14D003-AL\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      ],
+      (Ecu.abs, 0x760, None): [
+        b"L1MC-2D053-BA\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        b"L1MC-2D053-BD\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      ],
+      (Ecu.fwdRadar, 0x764, None): [
+        b"LB5T-14D049-AB\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        b"LB5T-14D049-AD\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      ],
+      # We consider all model year hints for ECU, even with different platform codes
+      (Ecu.fwdCamera, 0x706, None): [
+        b"LB5T-14F397-AD\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        b"NC5T-14F397-AF\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      ],
+    }
+    expected_fingerprint = CAR.FORD_EXPLORER_MK6
+
+    # ensure that we fuzzy match on all non-exact FW with changed revisions
+    live_fw = {
+      (0x730, None): {b"L1MC-14D003-XX\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
+      (0x760, None): {b"L1MC-2D053-XX\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
+      (0x764, None): {b"LB5T-14D049-XX\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
+      (0x706, None): {b"LB5T-14F397-XX\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"},
+    }
+    candidates = FW_QUERY_CONFIG.match_fw_to_car_fuzzy(live_fw, '', {expected_fingerprint: offline_fw})
+    assert candidates == {expected_fingerprint}
+
+    # model year hint in between the range should match
+    live_fw[(0x706, None)] = {b"MB5T-14F397-XX\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"}
+    candidates = FW_QUERY_CONFIG.match_fw_to_car_fuzzy(live_fw, '', {expected_fingerprint: offline_fw,})
+    assert candidates == {expected_fingerprint}
+
+    # unseen model year hint should not match
+    live_fw[(0x760, None)] = {b"M1MC-2D053-XX\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"}
+    candidates = FW_QUERY_CONFIG.match_fw_to_car_fuzzy(live_fw, '', {expected_fingerprint: offline_fw})
+    assert len(candidates) == 0, "Should not match new model year hint"
