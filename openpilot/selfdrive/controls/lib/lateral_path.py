@@ -59,23 +59,18 @@ def _model_path(model) -> tuple[list[float], list[float], list[float]] | None:
   return distances, ys, unwrapped_headings
 
 
-def _curvature_rate(path: tuple[list[float], list[float], list[float]],
-                    path_offset: float, path_angle: float,
-                    desired_curvature: float) -> float:
-  """Fit the one C3 that joins the current action to the future model path."""
-  distances, offsets, headings = path
+def _curvature_rate(path: tuple[list[float], list[float], list[float]]) -> float:
+  """Return the model path's spatial curvature slope without action mismatch."""
+  distances, _, headings = path
   rates = []
   for requested_horizon in PATH_CURVATURE_RATE_HORIZONS:
     horizon = min(requested_horizon, distances[-1])
     if horizon <= 0.0:
       continue
-    offset = _sample(horizon, distances, offsets)
-    heading = _sample(horizon, distances, headings)
-    rates.extend((
-      6.0 * (offset - path_offset - path_angle * horizon -
-             0.5 * desired_curvature * horizon ** 2) / horizon ** 3,
-      2.0 * (heading - path_angle - desired_curvature * horizon) / horizon ** 2,
-    ))
+    start = _sample(0.0, distances, headings)
+    midpoint = _sample(0.5 * horizon, distances, headings)
+    end = _sample(horizon, distances, headings)
+    rates.append(4.0 * (start - 2.0 * midpoint + end) / horizon ** 2)
   return median(rates) if rates else 0.0
 
 
@@ -95,7 +90,5 @@ def model_lateral_path(model, desired_curvature: float, v_ego: float) -> Lateral
     path_offset=path_offset,
     path_angle=path_angle,
     curvature=desired_curvature,
-    curvature_rate=_curvature_rate(
-      path, path_offset, path_angle, desired_curvature,
-    ),
+    curvature_rate=_curvature_rate(path),
   )

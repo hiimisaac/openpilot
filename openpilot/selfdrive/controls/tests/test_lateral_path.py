@@ -36,12 +36,12 @@ def test_model_lateral_path_is_spatial_and_speed_independent():
   assert slow_target == fast_target
 
 
-def test_model_lateral_path_uses_curvature_rate_to_join_action_to_future_path():
+def test_model_lateral_path_does_not_turn_action_mismatch_into_curvature_rate():
   target = model_lateral_path(polynomial_model(0.01), 0.004, 7.0)
 
   assert target.valid
   assert target.curvature == 0.004
-  assert target.curvature_rate > 0.0
+  assert math.isclose(target.curvature_rate, 0.0, abs_tol=1e-5)
 
 
 def test_model_lateral_path_preserves_action_when_model_is_invalid():
