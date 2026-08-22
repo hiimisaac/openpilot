@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 import math
+from statistics import median
 
 
-PATH_OFFSET_DISTANCE = 7.0
-PATH_MIN_LOOKAHEAD = 7.0
 PATH_CURVATURE_RATE_HORIZONS = (3.5, 5.0, 7.0)
 
 
@@ -60,40 +59,43 @@ def _model_path(model) -> tuple[list[float], list[float], list[float]] | None:
   return distances, ys, unwrapped_headings
 
 
-def _curvature_rate(path: tuple[list[float], list[float], list[float]]) -> float:
-  distances, _, headings = path
+def _curvature_rate(path: tuple[list[float], list[float], list[float]],
+                    path_offset: float, path_angle: float,
+                    desired_curvature: float) -> float:
+  """Fit the one C3 that joins the current action to the future model path."""
+  distances, offsets, headings = path
   rates = []
   for requested_horizon in PATH_CURVATURE_RATE_HORIZONS:
     horizon = min(requested_horizon, distances[-1])
     if horizon <= 0.0:
       continue
-    start = _sample(0.0, distances, headings)
-    midpoint = _sample(0.5 * horizon, distances, headings)
-    end = _sample(horizon, distances, headings)
-    rates.append(4.0 * (start - 2.0 * midpoint + end) / (horizon * horizon))
-  if not rates:
-    return 0.0
-  while len(rates) < 3:
-    rates.append(rates[-1])
-  magnitude = sum(abs(rate) for rate in rates)
-  if magnitude == 0.0:
-    return 0.0
-  return sorted(rates)[1] * abs(sum(rates)) / magnitude
+    offset = _sample(horizon, distances, offsets)
+    heading = _sample(horizon, distances, headings)
+    rates.extend((
+      6.0 * (offset - path_offset - path_angle * horizon -
+             0.5 * desired_curvature * horizon ** 2) / horizon ** 3,
+      2.0 * (heading - path_angle - desired_curvature * horizon) / horizon ** 2,
+    ))
+  return median(rates) if rates else 0.0
 
 
 def model_lateral_path(model, desired_curvature: float, v_ego: float) -> LateralPathTarget:
-  """Convert the model trajectory and action into a vehicle-independent path target."""
+  """Fit one current-origin cubic to the model trajectory and action."""
   desired_curvature = _finite(desired_curvature)
-  v_ego = max(_finite(v_ego), 0.0)
+  del v_ego  # A spatial path is independent of how quickly the vehicle traverses it.
   path = _model_path(model)
   if path is None:
     return LateralPathTarget(curvature=desired_curvature)
 
   distances, offsets, headings = path
+  path_offset = _sample(0.0, distances, offsets)
+  path_angle = _sample(0.0, distances, headings)
   return LateralPathTarget(
     valid=True,
-    path_offset=_sample(PATH_OFFSET_DISTANCE, distances, offsets),
-    path_angle=_sample(max(v_ego, PATH_MIN_LOOKAHEAD), distances, headings),
+    path_offset=path_offset,
+    path_angle=path_angle,
     curvature=desired_curvature,
-    curvature_rate=_curvature_rate(path),
+    curvature_rate=_curvature_rate(
+      path, path_offset, path_angle, desired_curvature,
+    ),
   )
