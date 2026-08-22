@@ -35,6 +35,13 @@ class TestParams(OpenpilotTestCase):
     assert self.params.get("DongleId") is not None
     assert not os.path.isfile(undefined_param)
 
+  def test_always_offroad_mode_is_transient(self):
+    self.params.put_bool("OffroadMode", True, block=True)
+    assert self.params.get_bool("OffroadMode")
+
+    self.params.clear_all(ParamKeyFlag.CLEAR_ON_MANAGER_START)
+    assert self.params.get("OffroadMode") is None
+
   def test_params_two_things(self):
     self.params.put("DongleId", "bob", block=True)
     self.params.put("AthenadPid", 123, block=True)

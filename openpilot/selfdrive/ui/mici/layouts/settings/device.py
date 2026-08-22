@@ -179,6 +179,18 @@ class DeviceLayoutMici(NavScroller):
     reset_calibration_btn = EngagedConfirmationButton("reset calibration", "reset", gui_app.texture("icons_mici/settings/device/lkas.png", 122, 64),
                                                       reset_calibration_callback)
 
+    always_offroad_icon = gui_app.texture("icons_mici/settings/device/lkas.png", 122, 64)
+    enable_always_offroad_btn = EngagedConfirmationButton(
+      "always\noffroad", "enter always offroad", always_offroad_icon,
+      lambda: ui_state.params.put_bool("OffroadMode", True, block=True), red=True,
+    )
+    enable_always_offroad_btn.set_visible(lambda: not ui_state.params.get_bool("OffroadMode"))
+    exit_always_offroad_btn = EngagedConfirmationButton(
+      "exit always\noffroad", "exit always offroad", always_offroad_icon,
+      lambda: ui_state.params.put_bool("OffroadMode", False, block=True),
+    )
+    exit_always_offroad_btn.set_visible(lambda: ui_state.params.get_bool("OffroadMode"))
+
     reboot_btn = EngagedConfirmationCircleButton("reboot", gui_app.texture("icons_mici/settings/device/reboot.png", 64, 70),
                                                  reboot_callback, exit_on_confirm=False)
 
@@ -203,6 +215,8 @@ class DeviceLayoutMici(NavScroller):
     self._scroller.add_widgets([
       DeviceInfoLayoutMici(),
       PairBigButton(),
+      enable_always_offroad_btn,
+      exit_always_offroad_btn,
       review_training_guide_btn,
       cabin_cam_btn,
       terms_btn,

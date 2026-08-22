@@ -22,6 +22,7 @@ from openpilot.system.ui.widgets.scroller_tici import Scroller
 DESCRIPTIONS = {
   'pair_device': tr_noop("Pair your device with comma connect (connect.comma.ai) and claim your comma prime offer."),
   'cabin_camera': tr_noop("Preview the cabin camera to ensure that driver monitoring has good visibility. (vehicle must be off)"),
+  'always_offroad': tr_noop("Stop openpilot controls and enter the offroad interface while the vehicle remains powered. Disengage before enabling."),
   'reset_calibration': tr_noop("openpilot requires the device to be mounted within 4° left or right and within 5° up or 9° down."),
   'review_guide': tr_noop("Review the rules, features, and limitations of openpilot"),
 }
@@ -52,11 +53,18 @@ class DeviceLayout(Widget):
 
     self._power_off_btn = dual_button_item(lambda: tr("Reboot"), lambda: tr("Power Off"),
                                            left_callback=self._reboot_prompt, right_callback=self._power_off_prompt)
+    self._always_offroad_btn = button_item(
+      lambda: tr("Always Offroad"),
+      lambda: tr("EXIT") if self._params.get_bool("OffroadMode") else tr("ENABLE"),
+      lambda: tr(DESCRIPTIONS['always_offroad']),
+      callback=self._always_offroad_prompt,
+    )
 
     items = [
       text_item(lambda: tr("Dongle ID"), self._params.get("DongleId") or (lambda: tr("N/A"))),
       text_item(lambda: tr("Serial"), self._params.get("HardwareSerial") or (lambda: tr("N/A"))),
       self._pair_device_btn,
+      self._always_offroad_btn,
       button_item(lambda: tr("Cabin Camera"), lambda: tr("PREVIEW"), lambda: tr(DESCRIPTIONS['cabin_camera']),
                   callback=lambda: gui_app.push_widget(CabinCameraDialog()), enabled=ui_state.is_offroad),
       self._reset_calib_btn,
@@ -109,6 +117,22 @@ class DeviceLayout(Widget):
 
     dialog = ConfirmDialog(tr("Are you sure you want to reset calibration?"), tr("Reset"), callback=reset_calibration)
     gui_app.push_widget(dialog)
+
+  def _always_offroad_prompt(self):
+    if ui_state.engaged:
+      gui_app.push_widget(alert_dialog(tr("Disengage to Enter Always Offroad Mode")))
+      return
+
+    enabled = self._params.get_bool("OffroadMode")
+    prompt = tr("Are you sure you want to exit Always Offroad mode?") if enabled else \
+             tr("Are you sure you want to enter Always Offroad mode? openpilot controls and recording will stop.")
+
+    def set_always_offroad(result: DialogResult):
+      # Check again in case controls engaged while the dialog was open.
+      if result == DialogResult.CONFIRM and not ui_state.engaged:
+        self._params.put_bool("OffroadMode", not enabled, block=True)
+
+    gui_app.push_widget(ConfirmDialog(prompt, tr("Confirm"), callback=set_always_offroad))
 
   def _update_calib_description(self):
     desc = tr(DESCRIPTIONS['reset_calibration'])
