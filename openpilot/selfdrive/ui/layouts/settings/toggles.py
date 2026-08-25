@@ -9,6 +9,7 @@ from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.car.mads import is_mads_available
+from opendbc.car.ford.values import CAR
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 
@@ -21,6 +22,10 @@ DESCRIPTIONS = {
   "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage openpilot."),
   "MadsEnabled": tr_noop(
     "Use the cruise main button to control steering independently from ACC. When the main switch is on, steering remains active while ACC is off."
+  ),
+  "FordAdaptiveLateral": tr_noop(
+    "Experimentally adapt the fast Ford steering authority to this PSCM while preserving the driving model's requested path. " +
+    "Learning resets when openpilot restarts."
   ),
   "LaneTurnDesire": tr_noop(
     "With one turn signal on below 19 mph, hint to the driving model to plan a turn in that direction. Blind-spot detection can suppress the hint."
@@ -70,6 +75,12 @@ class TogglesLayout(Widget):
       "MadsEnabled": (
         lambda: tr("Modular Assistive Driving System (MADS)"),
         DESCRIPTIONS["MadsEnabled"],
+        "chffr_wheel.png",
+        True,
+      ),
+      "FordAdaptiveLateral": (
+        lambda: tr("Adaptive Ford Steering (MRAC)"),
+        DESCRIPTIONS["FordAdaptiveLateral"],
         "chffr_wheel.png",
         True,
       ),
@@ -230,6 +241,12 @@ class TogglesLayout(Widget):
       self._toggles["MadsEnabled"].action_item.set_enabled(mads_supported and not mads_locked and not ui_state.engaged)
       mads_description = DESCRIPTIONS["MadsEnabled"] if mads_supported else tr("MADS is currently available only on Ford platforms.")
       self._toggles["MadsEnabled"].set_description(mads_description)
+
+      adaptive_supported = ui_state.CP.carFingerprint == CAR.FORD_F_150_LIGHTNING_MK1
+      self._toggles["FordAdaptiveLateral"].action_item.set_enabled(adaptive_supported and not ui_state.engaged)
+      adaptive_description = (DESCRIPTIONS["FordAdaptiveLateral"] if adaptive_supported else
+                              tr("Adaptive Ford steering is currently identified only for the F-150 Lightning."))
+      self._toggles["FordAdaptiveLateral"].set_description(adaptive_description)
 
   def _render(self, rect):
     self._scroller.render(rect)

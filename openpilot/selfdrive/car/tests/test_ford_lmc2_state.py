@@ -34,6 +34,16 @@ def test_ford_lmc2_custom_message_round_trip():
   msg = messaging.new_message("fordLmc2ControlState")
   msg.fordLmc2ControlState.utilization = -0.8
   msg.fordLmc2ControlState.limit = "close"
+  msg.fordLmc2ControlState.adaptiveEnabled = True
+  msg.fordLmc2ControlState.adaptiveGain = 0.08
+  msg.fordLmc2ControlState.adaptiveReferenceCurvature = 0.012
+  msg.fordLmc2ControlState.adaptiveTrackingError = 0.003
+  msg.fordLmc2ControlState.adapting = True
 
   assert msg.fordLmc2ControlState.utilization < -0.79
   assert msg.fordLmc2ControlState.limit.raw == 1
+  assert msg.fordLmc2ControlState.adaptiveEnabled
+  assert msg.fordLmc2ControlState.adaptiveGain > 0.079
+  assert msg.fordLmc2ControlState.adaptiveReferenceCurvature > 0.011
+  assert msg.fordLmc2ControlState.adaptiveTrackingError > 0.002
+  assert msg.fordLmc2ControlState.adapting

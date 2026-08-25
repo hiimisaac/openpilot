@@ -13,6 +13,11 @@ $Cxx.namespace("cereal");
 struct FordLmc2ControlState @0x81c2f05a394cf4af {
   utilization @0 :Float32;  # signed command-envelope usage [-1.0, 1.0]
   limit @1 :Limit;
+  adaptiveEnabled @2 :Bool;
+  adaptiveGain @3 :Float32;
+  adaptiveReferenceCurvature @4 :Float32;
+  adaptiveTrackingError @5 :Float32;
+  adapting @6 :Bool;
 
   enum Limit {
     notReached @0;

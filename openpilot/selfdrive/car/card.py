@@ -128,6 +128,8 @@ class Car:
     self.CP.alternativeExperience = 0
     if is_mads_available(self.CP) and self.params.get_bool("MadsEnabled"):
       self.CP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.ENABLE_MADS
+    if self.CP.brand == "ford" and self.CI.CC is not None and hasattr(self.CI.CC, "set_adaptive_lateral_enabled"):
+      self.CI.CC.set_adaptive_lateral_enabled(self.params.get_bool("FordAdaptiveLateral"))
     openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
     controller_available = self.CI.CC is not None and openpilot_enabled_toggle and not self.CP.dashcamOnly
     self.CP.passive = not controller_available or self.CP.dashcamOnly
@@ -234,6 +236,13 @@ class Car:
       lmc2_send.valid = co_send.valid
       lmc2_send.fordLmc2ControlState.utilization = utilization
       lmc2_send.fordLmc2ControlState.limit = FORD_LMC2_LIMIT_NAMES[limit]
+      adaptive_state = getattr(self.CI.CC, "adaptive_lateral_state", None)
+      if adaptive_state is not None:
+        lmc2_send.fordLmc2ControlState.adaptiveEnabled = adaptive_state.enabled
+        lmc2_send.fordLmc2ControlState.adaptiveGain = adaptive_state.gain
+        lmc2_send.fordLmc2ControlState.adaptiveReferenceCurvature = adaptive_state.reference_curvature
+        lmc2_send.fordLmc2ControlState.adaptiveTrackingError = adaptive_state.tracking_error
+        lmc2_send.fordLmc2ControlState.adapting = adaptive_state.adapting
       self.pm.send('fordLmc2ControlState', lmc2_send)
 
     # kick off controlsd step while we actuate the latest carControl packet

@@ -9,6 +9,7 @@ from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationCircleButt
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.settings.common import restart_needed_callback
 from openpilot.selfdrive.ui.ui_state import ui_state
+from opendbc.car.ford.values import CAR
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 
@@ -46,6 +47,7 @@ class TogglesLayoutMici(NavScroller):
     self._experimental_btn = BigToggle("experimental mode", initial_state=ui_state.params.get_bool("ExperimentalMode"),
                                        toggle_callback=self._on_experimental_mode)
     self._mads_btn = BigParamControl("modular assistive driving system", "MadsEnabled", toggle_callback=restart_needed_callback)
+    adaptive_lateral = BigParamControl("adaptive ford steering", "FordAdaptiveLateral", toggle_callback=restart_needed_callback)
     lane_turn_desire = BigParamControl("turn desires", "LaneTurnDesire")
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
     ldw_toggle = BigParamControl("lane departure warnings", "IsLdwEnabled")
@@ -58,6 +60,7 @@ class TogglesLayoutMici(NavScroller):
       self._personality_toggle,
       self._experimental_btn,
       self._mads_btn,
+      adaptive_lateral,
       lane_turn_desire,
       is_metric_toggle,
       ldw_toggle,
@@ -71,6 +74,7 @@ class TogglesLayoutMici(NavScroller):
     self._refresh_toggles = (
       ("ExperimentalMode", self._experimental_btn),
       ("MadsEnabled", self._mads_btn),
+      ("FordAdaptiveLateral", adaptive_lateral),
       ("LaneTurnDesire", lane_turn_desire),
       ("IsMetric", is_metric_toggle),
       ("IsLdwEnabled", ldw_toggle),
@@ -82,6 +86,8 @@ class TogglesLayoutMici(NavScroller):
 
     enable_openpilot.set_enabled(lambda: not ui_state.engaged)
     self._mads_btn.set_enabled(lambda: ui_state.CP is not None and is_mads_available(ui_state.CP) and not ui_state.engaged)
+    adaptive_lateral.set_enabled(lambda: ui_state.CP is not None and
+                                 ui_state.CP.carFingerprint == CAR.FORD_F_150_LIGHTNING_MK1 and not ui_state.engaged)
     record_front.set_enabled(False if ui_state.params.get_bool("RecordFrontLock") else (lambda: not ui_state.engaged))
     record_mic.set_enabled(lambda: not ui_state.engaged)
 

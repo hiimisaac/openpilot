@@ -88,6 +88,15 @@ class TestParams(OpenpilotTestCase):
     self.params.put("IsMetric", False, block=True)
     assert not self.params.get_bool("IsMetric")
 
+  def test_ford_adaptive_lateral_defaults_disabled_and_persists(self):
+    self.params.remove("FordAdaptiveLateral")
+    assert not self.params.get_bool("FordAdaptiveLateral")
+
+    self.params.put_bool("FordAdaptiveLateral", True, block=True)
+    self.params.clear_all(ParamKeyFlag.CLEAR_ON_MANAGER_START)
+
+    assert self.params.get_bool("FordAdaptiveLateral")
+
   def test_put_non_blocking_with_get_block(self):
     q = Params()
     def _delayed_writer():
