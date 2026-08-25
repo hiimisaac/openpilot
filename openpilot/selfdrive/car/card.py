@@ -17,7 +17,7 @@ from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallabl
 from opendbc.car.carlog import carlog
 from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
-from opendbc.car.ford.lateral_path_projector import LateralPathCommand, lmc2_control_utilization
+from opendbc.car.ford.learned_lateral_path import LearnedLateralPathCommand, lmc2_control_utilization
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
@@ -71,7 +71,7 @@ def ford_lmc2_control_state(CP: car.CarParams, ford_car_state, actuators: car.Ca
   limit = int(getattr(ford_car_state, "lat_ctl_limit", 0))
   limit = limit if 0 <= limit < len(FORD_LMC2_LIMIT_NAMES) else 0
   path = actuators.lateralPath
-  command = LateralPathCommand(path.valid, path.pathOffset, path.pathAngle, path.curvature, path.curvatureRate)
+  command = LearnedLateralPathCommand(path.valid, path.pathOffset, path.pathAngle, path.curvature, path.curvatureRate)
   return lmc2_control_utilization(command, limit), limit
 
 
