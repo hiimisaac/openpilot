@@ -18,7 +18,7 @@ FORD_LMC2_COEFFICIENT_SCHEMA = {
   "c2": (-0.02, 0.02, 0.00002),
   "c3": (-0.001024, 0.001023, 0.000001),
 }
-DATASET_VERSION = 2
+DATASET_VERSION = 3
 MAX_SAMPLE_AGE_NS = 100_000_000
 SAMPLE_PERIOD_NS = 50_000_000
 RESAMPLE_TOLERANCE_NS = 15_000_000
@@ -49,6 +49,11 @@ SAMPLE_DTYPE = np.dtype([
   ("column_torque_nm", "f8"),
   ("driver_torque_nm", "f8"),
   ("desired_angle_deg", "f8"),
+  ("model_c0", "f8"),
+  ("model_c1", "f8"),
+  ("model_c2", "f8"),
+  ("model_c3", "f8"),
+  ("model_path_valid", "?"),
   ("lat_limit", "i1"),
   ("lat_status", "i1"),
   ("lat_mode", "i1"),
@@ -274,6 +279,7 @@ def _extract_segment(path: Path) -> Iterable[tuple]:
     steering_rate = float(car_state.steeringRateDeg)
     steering_pressed = bool(car_state.steeringPressed)
     desired_angle = float(car_control.actuators.steeringAngleDeg)
+    model_path = car_control.actuators.lateralPath
     lat_active = bool(car_control.latActive)
 
     yield (
@@ -295,6 +301,11 @@ def _extract_segment(path: Path) -> Iterable[tuple]:
       epas["SteeringColumnTorque"],
       epas["DrvSte_Tq_Actl"],
       desired_angle,
+      model_path.pathOffset,
+      model_path.pathAngle,
+      model_path.curvature,
+      model_path.curvatureRate,
+      model_path.valid,
       round(limit["LatCtlLim_D_Stat"]),
       round(limit["LatCtlSte_D_Stat"]),
       round(command["LatCtl_D2_Rq"]),

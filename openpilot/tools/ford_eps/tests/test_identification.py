@@ -83,6 +83,11 @@ def test_extracts_synchronized_pscm_sample_from_rlog(tmp_path: Path):
   car_control.logMonoTime = mono_time
   car_control.carControl.latActive = True
   car_control.carControl.actuators.steeringAngleDeg = 15.0
+  car_control.carControl.actuators.lateralPath.valid = True
+  car_control.carControl.actuators.lateralPath.pathOffset = -0.4
+  car_control.carControl.actuators.lateralPath.pathAngle = -0.05
+  car_control.carControl.actuators.lateralPath.curvature = -0.008
+  car_control.carControl.actuators.lateralPath.curvatureRate = -0.0002
 
   rlog = tmp_path / "device_00000001--routehash--0--rlog.zst"
   save_log(str(rlog), [
@@ -110,6 +115,11 @@ def test_extracts_synchronized_pscm_sample_from_rlog(tmp_path: Path):
   assert sample["eps_voltage_v"] == pytest.approx(14.4)
   assert sample["column_torque_nm"] == pytest.approx(1.0)
   assert sample["desired_angle_deg"] == pytest.approx(15.0)
+  assert sample["model_c0"] == pytest.approx(-0.4)
+  assert sample["model_c1"] == pytest.approx(-0.05)
+  assert sample["model_c2"] == pytest.approx(-0.008)
+  assert sample["model_c3"] == pytest.approx(-0.0002)
+  assert sample["model_path_valid"]
   assert sample["lat_limit"] == 1
   assert sample["lat_active"]
 
