@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from openpilot.tools.ford_eps.dataset import FORD_LMC2_COEFFICIENT_SCHEMA, FordEpsDataset, device_id_from_route
-from openpilot.tools.ford_eps.model import FEATURE_NAMES, FordEpsModel, feature_vector
+from openpilot.tools.ford_eps.model import HORIZON_STEPS, MODEL_TIMESTEP_S, FEATURE_NAMES, FordEpsModel, feature_vector
 
 
 MIN_VALIDATION_ROUTES = 3
@@ -54,6 +54,20 @@ class LimitMetrics:
 
 
 @dataclass(frozen=True)
+class LargeTurnMetrics:
+  sample_count: int
+  desired_large_turn_count: int
+  active_maneuver_expert_count: int
+  model_angle_mae_deg: float
+  constant_angle_mae_deg: float
+  constant_rate_angle_mae_deg: float
+  model_rate_mae_deg_s: float
+  model_current_mae_a: float
+  route_model_angle_mae_p90_deg: float
+  in_distribution_fraction: float
+
+
+@dataclass(frozen=True)
 class ExcitationMetrics:
   minimum: float
   maximum: float
@@ -74,7 +88,9 @@ class IdentificationReport:
   train_routes: tuple[str, ...]
   validation_routes: tuple[str, ...]
   horizons: dict[str, HorizonMetrics]
+  direct_horizons: dict[str, HorizonMetrics]
   limit_metrics: LimitMetrics
+  large_turn_metrics: LargeTurnMetrics
   feature_condition_number: float
   feature_rank: int
   feature_count: int
@@ -86,6 +102,8 @@ class IdentificationReport:
   effective_response_identifiable: bool
   screening_ready: bool
   screening_failures: tuple[str, ...]
+  large_turn_ready: bool
+  large_turn_failures: tuple[str, ...]
   notes: tuple[str, ...]
 
   def to_dict(self) -> dict:
@@ -210,6 +228,157 @@ def _evaluate_limits(model: FordEpsModel, samples: np.ndarray, route_ids: set[st
   )
 
 
+def _evaluate_large_turns(model: FordEpsModel, samples: np.ndarray, route_ids: set[str],
+                          stride: int, require_active: bool) -> LargeTurnMetrics:
+  model_errors = []
+  constant_errors = []
+  constant_rate_errors = []
+  support = []
+  rate_errors = []
+  current_errors = []
+  desired_large_turn_count = 0
+  active_maneuver_expert_count = 0
+  route_errors: dict[str, list[float]] = {}
+  elapsed = HORIZON_STEPS * MODEL_TIMESTEP_S
+  for index in range(6, len(samples) - HORIZON_STEPS, max(stride, 1)):
+    final_index = index + HORIZON_STEPS
+    if samples[index]["route_id"] not in route_ids or samples[index - 6]["segment_id"] != samples[final_index]["segment_id"]:
+      continue
+    window = samples[index - 6:final_index + 1]
+    if require_active and (not np.all(window["lat_active"]) or np.any(window["steering_pressed"])):
+      continue
+    state = np.asarray([
+      samples[index]["pinion_angle_deg"], samples[index]["steering_rate_deg_s"], samples[index]["eps_current_a"],
+    ])
+    predicted_states, _, in_distribution, maneuver_share = model.predict_recorded_horizon(samples, index, state)
+    desired_large_turn = np.max(np.abs(samples[index + 1:final_index + 1]["desired_angle_deg"])) >= 80.0
+    active_maneuver_expert = maneuver_share >= 0.5
+    if not desired_large_turn and not active_maneuver_expert:
+      continue
+    desired_large_turn_count += int(desired_large_turn)
+    active_maneuver_expert_count += int(active_maneuver_expert)
+    predicted = predicted_states[-1]
+    actual_angle = float(samples[final_index]["pinion_angle_deg"])
+    model_error = float(predicted[0] - actual_angle)
+    model_errors.append(model_error)
+    constant_errors.append(float(samples[index]["pinion_angle_deg"] - actual_angle))
+    constant_rate_errors.append(float(
+      samples[index]["pinion_angle_deg"] + samples[index]["steering_rate_deg_s"] * elapsed - actual_angle,
+    ))
+    rate_errors.append(float(predicted[1] - samples[final_index]["steering_rate_deg_s"]))
+    current_errors.append(float(predicted[2] - samples[final_index]["eps_current_a"]))
+    support.append(in_distribution)
+    route_errors.setdefault(str(samples[index]["route_id"]), []).append(model_error)
+
+  route_maes = [_mae(errors) for errors in route_errors.values()]
+  return LargeTurnMetrics(
+    sample_count=len(model_errors),
+    desired_large_turn_count=desired_large_turn_count,
+    active_maneuver_expert_count=active_maneuver_expert_count,
+    model_angle_mae_deg=_mae(model_errors),
+    constant_angle_mae_deg=_mae(constant_errors),
+    constant_rate_angle_mae_deg=_mae(constant_rate_errors),
+    model_rate_mae_deg_s=_mae(rate_errors),
+    model_current_mae_a=_mae(current_errors),
+    route_model_angle_mae_p90_deg=float(np.quantile(route_maes, 0.9)) if route_maes else float("nan"),
+    in_distribution_fraction=float(np.mean(support)) if support else 0.0,
+  )
+
+
+def _evaluate_direct_horizons(model: FordEpsModel, samples: np.ndarray, route_ids: set[str],
+                              stride: int, require_active: bool) -> dict[str, HorizonMetrics]:
+  model_errors = [[] for _ in range(HORIZON_STEPS)]
+  constant_errors = [[] for _ in range(HORIZON_STEPS)]
+  constant_rate_errors = [[] for _ in range(HORIZON_STEPS)]
+  rate_errors = [[] for _ in range(HORIZON_STEPS)]
+  current_errors = [[] for _ in range(HORIZON_STEPS)]
+  route_errors: list[dict[str, list[float]]] = [{} for _ in range(HORIZON_STEPS)]
+
+  for index in range(6, len(samples) - HORIZON_STEPS, max(stride, 1)):
+    final_index = index + HORIZON_STEPS
+    if samples[index]["route_id"] not in route_ids or samples[index - 6]["segment_id"] != samples[final_index]["segment_id"]:
+      continue
+    window = samples[index - 6:final_index + 1]
+    if require_active and (not np.all(window["lat_active"]) or np.any(window["steering_pressed"])):
+      continue
+    state = np.asarray([
+      samples[index]["pinion_angle_deg"], samples[index]["steering_rate_deg_s"], samples[index]["eps_current_a"],
+    ])
+    predicted_states, _, _, _ = model.predict_recorded_horizon(samples, index, state)
+    route_id = str(samples[index]["route_id"])
+    for horizon_index, predicted in enumerate(predicted_states):
+      actual = samples[index + horizon_index + 1]
+      elapsed = (horizon_index + 1) * MODEL_TIMESTEP_S
+      model_error = float(predicted[0] - actual["pinion_angle_deg"])
+      model_errors[horizon_index].append(model_error)
+      constant_errors[horizon_index].append(float(samples[index]["pinion_angle_deg"] - actual["pinion_angle_deg"]))
+      constant_rate_errors[horizon_index].append(float(
+        samples[index]["pinion_angle_deg"] + samples[index]["steering_rate_deg_s"] * elapsed - actual["pinion_angle_deg"],
+      ))
+      rate_errors[horizon_index].append(float(predicted[1] - actual["steering_rate_deg_s"]))
+      current_errors[horizon_index].append(float(predicted[2] - actual["eps_current_a"]))
+      route_errors[horizon_index].setdefault(route_id, []).append(model_error)
+
+  metrics = {}
+  for horizon_index in range(HORIZON_STEPS):
+    route_maes = np.asarray([_mae(errors) for errors in route_errors[horizon_index].values()])
+    metrics[f"{(horizon_index + 1) * MODEL_TIMESTEP_S:.2f}"] = HorizonMetrics(
+      sample_count=len(model_errors[horizon_index]),
+      model_angle_mae_deg=_mae(model_errors[horizon_index]),
+      constant_angle_mae_deg=_mae(constant_errors[horizon_index]),
+      constant_rate_angle_mae_deg=_mae(constant_rate_errors[horizon_index]),
+      model_rate_mae_deg_s=_mae(rate_errors[horizon_index]),
+      model_current_mae_a=_mae(current_errors[horizon_index]),
+      route_model_angle_mae_std_deg=float(np.std(route_maes)) if len(route_maes) else float("nan"),
+      route_model_angle_mae_p90_deg=float(np.quantile(route_maes, 0.9)) if len(route_maes) else float("nan"),
+    )
+  return metrics
+
+
+def _large_turn_failures(metrics: LargeTurnMetrics) -> tuple[str, ...]:
+  failures = []
+  if metrics.sample_count < 250:
+    failures.append("requires at least 250 held-out large-turn windows")
+  if metrics.active_maneuver_expert_count < 100:
+    failures.append("requires at least 100 held-out active maneuver-expert windows")
+  if metrics.model_angle_mae_deg > 0.95 * min(metrics.constant_angle_mae_deg, metrics.constant_rate_angle_mae_deg):
+    failures.append("large-turn angle MAE lacks a 5% margin over both baselines")
+  if metrics.model_angle_mae_deg > 8.0:
+    failures.append("large-turn angle MAE exceeds 8.0 deg at 250 ms")
+  if metrics.route_model_angle_mae_p90_deg > 10.0:
+    failures.append("large-turn route-p90 angle MAE exceeds 10.0 deg")
+  if metrics.model_rate_mae_deg_s > 60.0:
+    failures.append("large-turn rate MAE exceeds 60.0 deg/s")
+  if metrics.model_current_mae_a > 1.5:
+    failures.append("large-turn current MAE exceeds 1.5 A")
+  if metrics.in_distribution_fraction < 0.5:
+    failures.append("fewer than half of held-out large turns are inside identified support")
+  return tuple(failures)
+
+
+def _direct_screening_failures(horizons: dict[str, HorizonMetrics]) -> tuple[str, ...]:
+  """Require the predictor used by the inverse planner to preserve ordinary driving."""
+  failures = []
+  for horizon_text, metrics in horizons.items():
+    horizon = float(horizon_text)
+    baseline = min(metrics.constant_angle_mae_deg, metrics.constant_rate_angle_mae_deg)
+    max_angle_mae = max(0.75, 6.0 * horizon)
+    max_route_p90 = max(1.0, 8.0 * horizon)
+    if metrics.sample_count < MIN_HORIZON_SAMPLES:
+      failures.append(f"direct {horizon_text}s has fewer than {MIN_HORIZON_SAMPLES} validation windows")
+    if metrics.model_angle_mae_deg > 1.05 * baseline:
+      failures.append(f"direct {horizon_text}s angle MAE is more than 5% worse than baseline")
+    if metrics.model_angle_mae_deg > max_angle_mae:
+      failures.append(f"direct {horizon_text}s angle MAE exceeds {max_angle_mae:.2f} deg")
+    if metrics.route_model_angle_mae_p90_deg > max_route_p90:
+      failures.append(f"direct {horizon_text}s route-p90 angle MAE exceeds {max_route_p90:.2f} deg")
+    if metrics.model_rate_mae_deg_s > 25.0:
+      failures.append(f"direct {horizon_text}s rate MAE exceeds 25.0 deg/s")
+    if metrics.model_current_mae_a > MAX_CURRENT_MAE_A:
+      failures.append(f"direct {horizon_text}s current MAE exceeds {MAX_CURRENT_MAE_A:.1f} A")
+  return tuple(failures)
+
+
 def _calibrate_response_blend(samples: np.ndarray, train_routes: set[str], config: AnalysisConfig) -> float:
   """Tune how strongly the learned PSCM response corrects an inertial steering baseline."""
   routes = sorted(train_routes)
@@ -316,6 +485,9 @@ def fit(source: Iterable[str | Path] | FordEpsDataset, config: AnalysisConfig | 
     )
     for horizon in config.horizons_s
   }
+  direct_horizons = _evaluate_direct_horizons(
+    model, samples, validation_routes, config.rollout_stride, config.require_active,
+  )
   short_horizons = [metrics for horizon, metrics in horizons.items() if float(horizon) <= 0.5]
   effective_response_identifiable = bool(short_horizons) and all(
     metrics.model_angle_mae_deg < min(metrics.constant_angle_mae_deg, metrics.constant_rate_angle_mae_deg)
@@ -342,11 +514,18 @@ def fit(source: Iterable[str | Path] | FordEpsDataset, config: AnalysisConfig | 
       upper_limit_fraction=float(np.mean(values >= upper - resolution)),
     )
   limit_metrics = _evaluate_limits(model, samples, validation_routes, config.require_active)
+  large_turn_metrics = _evaluate_large_turns(
+    model, samples, validation_routes, config.rollout_stride, config.require_active,
+  )
+  large_turn_failures = _large_turn_failures(large_turn_metrics)
+  large_turn_ready = not large_turn_failures
   screening_failures = _screening_failures(horizons, limit_metrics, len(validation_routes))
+  screening_failures = (*screening_failures, *_direct_screening_failures(direct_horizons))
   if not effective_response_identifiable:
     screening_failures = (*screening_failures, "effective command response is not identifiable")
   screening_ready = not screening_failures
   model.screening_ready = screening_ready
+  model.large_turn_ready = large_turn_ready
   report = IdentificationReport(
     device_id=device_id,
     sample_count=len(samples),
@@ -357,7 +536,9 @@ def fit(source: Iterable[str | Path] | FordEpsDataset, config: AnalysisConfig | 
     train_routes=tuple(sorted(train_routes)),
     validation_routes=tuple(sorted(validation_routes)),
     horizons=horizons,
+    direct_horizons=direct_horizons,
     limit_metrics=limit_metrics,
+    large_turn_metrics=large_turn_metrics,
     feature_condition_number=condition,
     feature_rank=rank,
     feature_count=len(FEATURE_NAMES),
@@ -369,6 +550,8 @@ def fit(source: Iterable[str | Path] | FordEpsDataset, config: AnalysisConfig | 
     effective_response_identifiable=effective_response_identifiable,
     screening_ready=screening_ready,
     screening_failures=screening_failures,
+    large_turn_ready=large_turn_ready,
+    large_turn_failures=large_turn_failures,
     notes=(
       "SteMdule_I_Est is an estimated module-current signal, not a measured motor phase-current/torque pair.",
       "The fitted gain is a closed-loop PSCM/EPS equivalent and cannot uniquely separate motor kT, gearing, efficiency, and road load.",

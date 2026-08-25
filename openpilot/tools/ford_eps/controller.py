@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from openpilot.tools.ford_eps.dataset import FORD_LMC2_COEFFICIENT_SCHEMA, FordEpsInput, FordEpsOutput
-from openpilot.tools.ford_eps.model import FEATURE_NAMES, MODEL_TIMESTEP_S, FordEpsModel
+from openpilot.tools.ford_eps.model import COMMAND_HISTORY_LENGTH, FEATURE_NAMES, MODEL_TIMESTEP_S, FordEpsModel
 
 
 COEFFICIENT_NAMES = tuple(FORD_LMC2_COEFFICIENT_SCHEMA)
@@ -14,9 +14,6 @@ COEFFICIENT_RESOLUTIONS = np.asarray([
   FORD_LMC2_COEFFICIENT_SCHEMA[name][2] for name in COEFFICIENT_NAMES
 ])
 COEFFICIENT_FEATURE_INDICES = np.asarray([FEATURE_NAMES.index(name) for name in COEFFICIENT_NAMES], dtype=np.int64)
-COMMAND_HISTORY_LENGTH = 7
-
-
 @dataclass(frozen=True)
 class FordEpsPlanRequest:
   pinion_angle_deg: float
@@ -63,6 +60,8 @@ class FordEpsCommandPlanner:
 
   def plan(self, request: FordEpsPlanRequest) -> FordEpsPlan:
     self._validate_request(request)
+    if max(abs(angle) for angle in request.desired_angles_deg) >= 80.0 and not self.model.large_turn_ready:
+      raise ValueError("virtual EPS did not pass held-out large-turn validation")
     active = np.asarray((0, 1, 2, 3) if self.config.allow_c2_adjustment else (0, 1, 3), dtype=np.int64)
     correction = np.zeros((2, 4), dtype=np.float64)
     baseline_outputs, baseline_cost = self._evaluate(request, correction)
@@ -164,14 +163,13 @@ class FordEpsCommandPlanner:
   def _evaluate(self, request: FordEpsPlanRequest,
                 correction: np.ndarray) -> tuple[tuple[FordEpsOutput, ...], float]:
     commands = self._commands(request.baseline_commands, correction)
-    simulator = self.model.simulator(
+    outputs = self.model.predict_horizon(
       request.pinion_angle_deg,
       request.steering_rate_deg_s,
       request.eps_current_a,
-      request.command_history[-1],
-      command_history=request.command_history,
+      request.command_history,
+      commands,
     )
-    outputs = tuple(simulator.step(command) for command in commands)
     predicted_angles = np.asarray([output.pinion_angle_deg for output in outputs])
     predicted_rates = np.asarray([output.steering_rate_deg_s for output in outputs])
     desired_angles = np.asarray(request.desired_angles_deg)

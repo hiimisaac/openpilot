@@ -122,7 +122,8 @@ def test_extracts_synchronized_pscm_sample_from_rlog(tmp_path: Path):
 
 
 def synthetic_eps_rlog(path: Path, phase: float, sample_period_s: float = 0.05, sample_count: int = 320,
-                       response_delay_steps: int = 0, rapid_commands: bool = False) -> None:
+                       response_delay_steps: int = 0, rapid_commands: bool = False,
+                       turn_scale: float = 1.0) -> None:
   packer = CANPacker(DBC)
   messages = []
   angle = 0.0
@@ -130,14 +131,15 @@ def synthetic_eps_rlog(path: Path, phase: float, sample_period_s: float = 0.05, 
   rng = random.Random(round(phase * 1000))
   for i in range(sample_count):
     mono_time = 1_000_000_000 + round(i * sample_period_s * 1e9)
-    target_angle = rng.uniform(-28.0, 28.0) if rapid_commands else \
-                   32.0 * math.sin(i * 0.045 + phase) + 7.0 * math.sin(i * 0.13 + phase)
+    target_angle = turn_scale * (rng.uniform(-28.0, 28.0) if rapid_commands else
+                                 32.0 * math.sin(i * 0.045 + phase) + 7.0 * math.sin(i * 0.13 + phase))
     targets.append(target_angle)
     applied_target = targets[max(0, i - response_delay_steps)]
     next_angle = angle + 0.16 * (applied_target - angle)
     rate = (next_angle - angle) / sample_period_s
     angle = next_angle
-    c2 = target_angle / 2000.0
+    c2 = min(max(target_angle / 2000.0, -0.02), 0.02)
+    c0 = (target_angle - c2 * 2000.0) / 100.0
     current = 0.2 + 0.08 * abs(applied_target - angle)
 
     telemetry = [
@@ -167,7 +169,7 @@ def synthetic_eps_rlog(path: Path, phase: float, sample_period_s: float = 0.05, 
     ]
     command = packer.make_can_msg("LateralMotionControl2", 0, {
       "LatCtl_D2_Rq": 2,
-      "LatCtlPathOffst_L_Actl": 0.0,
+      "LatCtlPathOffst_L_Actl": c0,
       "LatCtlPath_An_Actl": 0.0,
       "LatCtlCurv_No_Actl": c2,
       "LatCtlCrv_NoRate2_Actl": 0.0,
@@ -270,6 +272,44 @@ def test_identifies_delayed_pscm_response(tmp_path: Path):
 
   for metrics in report.horizons.values():
     assert metrics.model_angle_mae_deg < metrics.constant_rate_angle_mae_deg
+
+
+def test_validates_direct_horizon_model_on_held_out_large_turns(tmp_path: Path):
+  rlogs = []
+  for route_index in range(8):
+    rlog = tmp_path / f"device_00000010--large-turn-{route_index}--0--rlog.zst"
+    synthetic_eps_rlog(rlog, route_index * 0.37, turn_scale=5.0)
+    rlogs.append(rlog)
+
+  dataset = FordEpsDataset.from_rlogs(rlogs)
+  result = fit(
+    dataset,
+    AnalysisConfig(horizons_s=(0.25,), validation_fraction=0.375, rollout_stride=1),
+  )
+
+  assert result.report.large_turn_ready
+  assert result.report.large_turn_metrics.sample_count >= 250
+  assert result.report.large_turn_metrics.model_angle_mae_deg < 0.95 * \
+    result.report.large_turn_metrics.constant_rate_angle_mae_deg
+  assert result.report.large_turn_metrics.in_distribution_fraction >= 0.5
+  assert result.report.large_turn_metrics.active_maneuver_expert_count > 0
+  assert set(result.report.direct_horizons) == {"0.05", "0.10", "0.15", "0.20", "0.25"}
+  assert result.model.state_max[0] > 1000.0
+
+  samples = dataset.samples
+  index = 200
+  state = np.asarray([
+    samples[index]["pinion_angle_deg"], samples[index]["steering_rate_deg_s"], samples[index]["eps_current_a"],
+  ])
+  baseline, _, _, _ = result.model.predict_recorded_horizon(samples, index, state)
+  expected_rates = np.diff(np.concatenate(([state[0]], baseline[:, 0]))) / 0.05
+  np.testing.assert_allclose(baseline[:, 1], expected_rates)
+
+  changed = samples.copy()
+  changed[index + 5]["c0"] = np.clip(changed[index + 5]["c0"] + 1.0, -5.12, 5.11)
+  counterfactual, _, _, _ = result.model.predict_recorded_horizon(changed, index, state)
+  np.testing.assert_allclose(counterfactual[0], baseline[0], atol=1e-12)
+  assert counterfactual[-1, 0] != pytest.approx(baseline[-1, 0])
 
 
 def test_saves_and_reloads_replayable_virtual_eps(tmp_path: Path):
@@ -429,11 +469,15 @@ def test_planner_improves_supported_angle_tracking_with_bounded_commands(tmp_pat
     fast_plan.commands, request.baseline_commands, strict=True,
   ))
 
-  simulator = result.model.simulator(
+  result.model.large_turn_ready = False
+  with pytest.raises(ValueError, match="large-turn validation"):
+    FordEpsCommandPlanner(result.model).plan(replace(request, desired_angles_deg=(100.0,) * len(desired)))
+  result.model.large_turn_ready = True
+
+  baseline_outputs = result.model.predict_horizon(
     request.pinion_angle_deg, request.steering_rate_deg_s, request.eps_current_a,
-    request.command_history[-1], command_history=request.command_history,
+    request.command_history, request.baseline_commands,
   )
-  baseline_outputs = tuple(simulator.step(command) for command in request.baseline_commands)
   exact_request = replace(
     request, desired_angles_deg=tuple(output.pinion_angle_deg for output in baseline_outputs),
   )

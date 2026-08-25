@@ -139,6 +139,9 @@ class FordEpsInput:
   column_torque_nm: float = 0.0
   driver_torque_nm: float = 0.0
   lat_active: bool = True
+  lat_limit: int = 0
+  lat_status: int = 0
+  lat_mode: int = 0
 
 
 @dataclass(frozen=True)
@@ -160,6 +163,7 @@ def sample_from_input(inputs: FordEpsInput, mono_time_ns: int = 0) -> np.void:
   for field in (
     "c0", "c1", "c2", "c3", "speed_mps", "yaw_rate_rad_s", "lateral_accel_mps2",
     "longitudinal_accel_mps2", "eps_voltage_v", "column_torque_nm", "driver_torque_nm", "lat_active",
+    "lat_limit", "lat_status", "lat_mode",
   ):
     sample[field] = getattr(inputs, field)
   return sample
@@ -180,6 +184,9 @@ def input_from_sample(sample: np.void) -> FordEpsInput:
     column_torque_nm=float(sample["column_torque_nm"]),
     driver_torque_nm=float(sample["driver_torque_nm"]),
     lat_active=bool(sample["lat_active"]),
+    lat_limit=int(sample["lat_limit"]),
+    lat_status=int(sample["lat_status"]),
+    lat_mode=int(sample["lat_mode"]),
   )
 
 

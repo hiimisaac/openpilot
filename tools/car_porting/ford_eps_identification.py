@@ -131,9 +131,23 @@ def main() -> None:
       f"{horizon}s: model angle MAE {metrics.model_angle_mae_deg:.2f} deg; " +
       f"hold {metrics.constant_angle_mae_deg:.2f}; constant-rate {metrics.constant_rate_angle_mae_deg:.2f}",
     )
+  for horizon, metrics in report.direct_horizons.items():
+    print(
+      f"direct {horizon}s: model angle MAE {metrics.model_angle_mae_deg:.2f} deg; " +
+      f"hold {metrics.constant_angle_mae_deg:.2f}; constant-rate {metrics.constant_rate_angle_mae_deg:.2f}; " +
+      f"rate {metrics.model_rate_mae_deg_s:.2f} deg/s; current {metrics.model_current_mae_a:.2f} A",
+    )
   print(
     f"PSCM limit: prevalence {report.limit_metrics.prevalence:.1%}; " +
     f"precision {report.limit_metrics.precision:.1%}; recall {report.limit_metrics.recall:.1%}",
+  )
+  print(
+    f"Large turns (250 ms): model MAE {report.large_turn_metrics.model_angle_mae_deg:.2f} deg; " +
+    f"constant-rate {report.large_turn_metrics.constant_rate_angle_mae_deg:.2f}; " +
+    f"desired-angle windows {report.large_turn_metrics.desired_large_turn_count}; " +
+    f"active-expert windows {report.large_turn_metrics.active_maneuver_expert_count}; " +
+    f"support {report.large_turn_metrics.in_distribution_fraction:.1%}; " +
+    f"ready={report.large_turn_ready}",
   )
 
 
