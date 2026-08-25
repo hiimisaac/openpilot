@@ -57,6 +57,30 @@ Traceback (most recent call last):
 AssertionError: {'gasPressed': 116} is not false : panda safety doesn't agree with CarState: {'gasPressed': 116}
 ```
 
+### [tools/car_porting/ford_eps_identification.py](/tools/car_porting/ford_eps_identification.py)
+
+Builds a device-specific, closed-loop Ford PSCM/EPS equivalent from local rlogs. It synchronizes LMC2 C0-C3 commands with
+pinion angle/rate, PSCM current and voltage, steering torque, speed, yaw/acceleration, and Ford's lateral-limit state. Complete
+routes are held out for validation; different dongle/device IDs are never averaged into one plant.
+
+```bash
+python3 tools/car_porting/ford_eps_identification.py /path/to/rlogs \
+  --device-id 112e4d6e0cad05e1 \
+  --max-segments 250 \
+  --dataset-output /tmp/ford-eps-samples.npz \
+  --model-output /tmp/ford-virtual-eps.npz \
+  --output /tmp/ford-eps-report.json
+```
+
+Use `--cache /tmp/ford-eps-samples.npz` to refit without decoding the logs again. `FordEpsModel.rollout()` replays a recorded
+sequence, while `FordEpsModel.simulator()` accepts a new sequence of `FordEpsInput` C0-C3 commands and environmental inputs. Each
+simulation step is exactly 50 ms and fails closed when its joint state/command combination is outside the fitted support. Models
+that lack at least three complete held-out routes, a 15% baseline margin, bounded mean/worst-route/rate/current errors, or reliable
+PSCM-limit classification are not written unless `--allow-unvalidated-model` is explicitly passed. The JSON report is always
+written and lists every failed gate. Low-confidence counterfactuals must not be treated as road-test
+results. The artifact is intended for offline controller screening, not on-device control. The available signals identify an
+effective closed-loop response; they cannot uniquely separate motor torque constant, gearing, efficiency, friction, and road load.
+
 ## Jupyter notebooks
 
 To use these notebooks, install Jupyter within your [openpilot virtual environment](/tools/README.md).
