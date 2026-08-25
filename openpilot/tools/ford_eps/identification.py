@@ -5,16 +5,10 @@ from pathlib import Path
 
 import numpy as np
 
-from openpilot.tools.ford_eps.dataset import FordEpsDataset, device_id_from_route
+from openpilot.tools.ford_eps.dataset import FORD_LMC2_COEFFICIENT_SCHEMA, FordEpsDataset, device_id_from_route
 from openpilot.tools.ford_eps.model import FEATURE_NAMES, FordEpsModel, feature_vector
 
 
-COEFFICIENT_LIMITS = {
-  "c0": (-5.12, 5.11, 0.01),
-  "c1": (-0.5, 0.5235, 0.0005),
-  "c2": (-0.02, 0.02094, 0.00001),
-  "c3": (-0.001024, 0.001023, 0.000001),
-}
 MIN_VALIDATION_ROUTES = 3
 MIN_HORIZON_SAMPLES = 1_000
 MAX_BASELINE_ERROR_RATIO = 0.85
@@ -337,7 +331,7 @@ def fit(source: Iterable[str | Path] | FordEpsDataset, config: AnalysisConfig | 
   }
   excitation_samples = samples[samples["lat_active"] & ~samples["steering_pressed"]]
   coefficient_excitation = {}
-  for field, (lower, upper, resolution) in COEFFICIENT_LIMITS.items():
+  for field, (lower, upper, resolution) in FORD_LMC2_COEFFICIENT_SCHEMA.items():
     values = excitation_samples[field]
     coefficient_excitation[field] = ExcitationMetrics(
       minimum=float(np.min(values)),

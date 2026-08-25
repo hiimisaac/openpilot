@@ -291,11 +291,12 @@ class FordEpsModel:
     return confidence, marginal_score == 0.0 and joint_ratio <= 1.0
 
   def simulator(self, pinion_angle_deg: float, steering_rate_deg_s: float, eps_current_a: float,
-                initial_input: FordEpsInput, *, allow_unvalidated: bool = False) -> "FordEpsSimulator":
+                initial_input: FordEpsInput, *, command_history: tuple[FordEpsInput, ...] = (),
+                allow_unvalidated: bool = False) -> "FordEpsSimulator":
     if not self.screening_ready and not allow_unvalidated:
       raise ValueError("virtual EPS did not pass held-out validation")
     return FordEpsSimulator(
-      self, np.asarray([pinion_angle_deg, steering_rate_deg_s, eps_current_a]), initial_input,
+      self, np.asarray([pinion_angle_deg, steering_rate_deg_s, eps_current_a]), initial_input, command_history,
     )
 
   def rollout(self, dataset: FordEpsDataset, start: int, steps: int) -> np.ndarray:
@@ -388,11 +389,16 @@ class FordEpsModel:
 class FordEpsSimulator:
   """Stateful input-oriented interface for replaying new LMC2 command sequences."""
 
-  def __init__(self, model: FordEpsModel, initial_state: np.ndarray, initial_input: FordEpsInput):
+  def __init__(self, model: FordEpsModel, initial_state: np.ndarray, initial_input: FordEpsInput,
+               command_history: tuple[FordEpsInput, ...] = ()):
     self.model = model
     self._state = initial_state.astype(np.float64)
-    initial_sample = sample_from_input(initial_input)
-    self._history: deque[np.void] = deque((initial_sample.copy() for _ in range(7)), maxlen=7)
+    history = command_history or (initial_input,)
+    history = (history[0],) * max(7 - len(history), 0) + history[-7:]
+    self._history: deque[np.void] = deque(
+      (sample_from_input(command, (index - 6) * round(MODEL_TIMESTEP_S * 1e9)) for index, command in enumerate(history)),
+      maxlen=7,
+    )
     self._step = 0
 
   @property

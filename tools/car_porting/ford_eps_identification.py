@@ -8,7 +8,7 @@ import random
 
 from tqdm import tqdm
 
-from openpilot.tools.ford_eps import AnalysisConfig, FordEpsDataset, fit
+from openpilot.tools.ford_eps import AnalysisConfig, FordEpsDataset, FordEpsPlannerConfig, evaluate_planner, fit
 from openpilot.tools.ford_eps.dataset import device_id_from_route, route_and_segment
 
 
@@ -52,6 +52,11 @@ def main() -> None:
   parser.add_argument("--cache", type=Path, help="load an existing .npz dataset cache")
   parser.add_argument("--dataset-output", type=Path, help="write the decoded dataset to this .npz cache")
   parser.add_argument("--model-output", type=Path, help="write the fitted replayable virtual EPS to this .npz artifact")
+  parser.add_argument("--planner-output", type=Path, help="write held-out inverse-planner screening metrics to this JSON file")
+  parser.add_argument("--planner-max-windows", type=int, help="evenly sample at most this many held-out planner windows")
+  parser.add_argument("--planner-stride", type=int, default=20, help="planner evaluation stride in 50 ms samples")
+  parser.add_argument("--planner-horizon", type=int, default=5, help="planner evaluation horizon in 50 ms samples")
+  parser.add_argument("--planner-allow-c2", action="store_true", help="allow the inverse planner to alter persistent C2")
   parser.add_argument(
     "--allow-unvalidated-model", action="store_true",
     help="write an artifact that failed held-out screening checks (unsafe for controller comparison)",
@@ -98,6 +103,22 @@ def main() -> None:
   args.output.parent.mkdir(parents=True, exist_ok=True)
   report.write_json(args.output)
   print(f"Wrote identification report to {args.output}")
+  if args.planner_output is not None:
+    if not report.screening_ready:
+      parser.error("model failed held-out screening checks; planner evaluation is unavailable")
+    planner_evaluation = evaluate_planner(
+      dataset, result.model, report.validation_routes,
+      config=FordEpsPlannerConfig(allow_c2_adjustment=args.planner_allow_c2),
+      horizon_steps=args.planner_horizon, stride=args.planner_stride, max_windows=args.planner_max_windows,
+    )
+    args.planner_output.parent.mkdir(parents=True, exist_ok=True)
+    planner_evaluation.write_json(args.planner_output)
+    print(
+      f"Wrote inverse-planner screening report to {args.planner_output}: " +
+      f"model-internal predicted MAE {planner_evaluation.predicted_baseline_angle_mae_deg:.2f} -> " +
+      f"{planner_evaluation.predicted_planned_angle_mae_deg:.2f} deg; " +
+      f"OOD rejected {planner_evaluation.rejected_window_count}/{planner_evaluation.requested_window_count}",
+    )
   if args.model_output is not None:
     if not report.screening_ready and not args.allow_unvalidated_model:
       parser.error("model failed held-out screening checks; omit --model-output or pass --allow-unvalidated-model")

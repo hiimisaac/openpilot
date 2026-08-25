@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 from pathlib import Path
 import random
 
@@ -6,8 +7,19 @@ import openpilot.cereal.messaging as messaging
 from opendbc.can import CANPacker
 import numpy as np
 import pytest
-from openpilot.tools.ford_eps import AnalysisConfig, FordEpsDataset, FordEpsInput, FordEpsModel, fit, identify
-from openpilot.tools.ford_eps.dataset import device_id_from_route, route_and_segment
+from openpilot.tools.ford_eps import (
+  AnalysisConfig,
+  FordEpsCommandPlanner,
+  FordEpsDataset,
+  FordEpsInput,
+  FordEpsModel,
+  FordEpsPlannerConfig,
+  FordEpsPlanRequest,
+  evaluate_planner,
+  fit,
+  identify,
+)
+from openpilot.tools.ford_eps.dataset import device_id_from_route, input_from_sample, route_and_segment
 from openpilot.tools.lib.logreader import save_log
 
 
@@ -358,3 +370,92 @@ def test_unvalidated_model_cannot_create_screening_simulator(tmp_path: Path):
     model.simulator(0.0, 0.0, 0.0, inputs)
   with pytest.raises(ValueError, match="did not pass held-out validation"):
     model.save(tmp_path / "unvalidated.npz")
+
+
+def test_planner_improves_supported_angle_tracking_with_bounded_commands(tmp_path: Path):
+  train = tmp_path / "device_00000009--planner-train--0--rlog.zst"
+  validation = tmp_path / "device_00000009--planner-validation--0--rlog.zst"
+  synthetic_eps_rlog(train, 0.0)
+  synthetic_eps_rlog(validation, 0.8)
+  dataset = FordEpsDataset.from_rlogs([train, validation])
+  result = fit(dataset, AnalysisConfig(validation_route="device_00000009--planner-validation"))
+  result.model.screening_ready = True
+  start = 100
+  sample = dataset.samples[start]
+  history = tuple(input_from_sample(dataset.samples[index]) for index in range(start - 6, start + 1))
+  current_environment = history[-1]
+  baseline = tuple(
+    replace(
+      current_environment,
+      c0=float(dataset.samples[index]["c0"]), c1=float(dataset.samples[index]["c1"]),
+      c2=float(dataset.samples[index]["c2"]), c3=float(dataset.samples[index]["c3"]),
+    )
+    for index in range(start + 1, start + 6)
+  )
+  desired = tuple(float(dataset.samples[index]["desired_angle_deg"]) for index in range(start + 1, start + 6))
+  request = FordEpsPlanRequest(
+    pinion_angle_deg=float(sample["pinion_angle_deg"]),
+    steering_rate_deg_s=float(sample["steering_rate_deg_s"]),
+    eps_current_a=float(sample["eps_current_a"]),
+    command_history=history,
+    baseline_commands=baseline,
+    desired_angles_deg=desired,
+  )
+
+  plan = FordEpsCommandPlanner(result.model, FordEpsPlannerConfig(allow_c2_adjustment=True)).plan(request)
+
+  assert plan.predicted_angle_mae_deg < plan.baseline_angle_mae_deg
+  assert plan.in_distribution
+  for baseline_output, predicted_output in zip(plan.baseline_outputs, plan.predicted_outputs, strict=True):
+    assert not predicted_output.limit_predicted or baseline_output.limit_predicted
+    if baseline_output.limit_predicted:
+      assert predicted_output.limit_score <= baseline_output.limit_score
+  assert plan.commands[0].c2 - baseline[0].c2 != pytest.approx(plan.commands[-1].c2 - baseline[-1].c2)
+  limits = (
+    (-5.12, 5.11, 0.01),
+    (-0.5, 0.5235, 0.0005),
+    (-0.02, 0.02, 0.00002),
+    (-0.001024, 0.001023, 0.000001),
+  )
+  for command in plan.commands:
+    for value, (lower, upper, resolution) in zip(
+      (command.c0, command.c1, command.c2, command.c3), limits, strict=True,
+    ):
+      assert lower <= value <= upper
+      assert (value - lower) / resolution == pytest.approx(round((value - lower) / resolution), abs=1e-7)
+
+  fast_plan = FordEpsCommandPlanner(result.model).plan(request)
+  assert all(command.c2 == baseline_command.c2 for command, baseline_command in zip(
+    fast_plan.commands, request.baseline_commands, strict=True,
+  ))
+
+  simulator = result.model.simulator(
+    request.pinion_angle_deg, request.steering_rate_deg_s, request.eps_current_a,
+    request.command_history[-1], command_history=request.command_history,
+  )
+  baseline_outputs = tuple(simulator.step(command) for command in request.baseline_commands)
+  exact_request = replace(
+    request, desired_angles_deg=tuple(output.pinion_angle_deg for output in baseline_outputs),
+  )
+  exact_plan = FordEpsCommandPlanner(result.model).plan(exact_request)
+  assert exact_plan.predicted_angle_mae_deg == pytest.approx(0.0)
+  assert exact_plan.commands == exact_request.baseline_commands
+
+  with pytest.raises(ValueError, match="exactly seven"):
+    FordEpsCommandPlanner(result.model).plan(replace(request, command_history=request.command_history[-1:]))
+
+  evaluation = evaluate_planner(
+    dataset, result.model, ("device_00000009--planner-validation",),
+    config=FordEpsPlannerConfig(allow_c2_adjustment=True), horizon_steps=5, stride=10, max_windows=20,
+  )
+  assert evaluation.route_count == 1
+  assert evaluation.evidence_scope == "virtual_eps_internal_objective_only"
+  assert 0 < evaluation.supported_window_count <= 20
+  assert evaluation.rejected_window_count > 0
+  assert evaluation.predicted_planned_angle_mae_deg < evaluation.predicted_baseline_angle_mae_deg
+  assert evaluation.predicted_improved_fraction > 0.0
+  assert evaluation.predicted_planned_limit_fraction <= evaluation.predicted_baseline_limit_fraction
+  assert evaluation.mean_abs_coefficient_delta[2] > 0.0
+
+  with pytest.raises(ValueError, match="maximum planner windows must be positive"):
+    evaluate_planner(dataset, result.model, ("device_00000009--planner-validation",), max_windows=0)

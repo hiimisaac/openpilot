@@ -69,6 +69,7 @@ python3 tools/car_porting/ford_eps_identification.py /path/to/rlogs \
   --max-segments 250 \
   --dataset-output /tmp/ford-eps-samples.npz \
   --model-output /tmp/ford-virtual-eps.npz \
+  --planner-output /tmp/ford-eps-planner.json \
   --output /tmp/ford-eps-report.json
 ```
 
@@ -80,6 +81,18 @@ PSCM-limit classification are not written unless `--allow-unvalidated-model` is 
 written and lists every failed gate. Low-confidence counterfactuals must not be treated as road-test
 results. The artifact is intended for offline controller screening, not on-device control. The available signals identify an
 effective closed-loop response; they cannot uniquely separate motor torque constant, gearing, efficiency, friction, and road load.
+
+`FordEpsCommandPlanner` is the inverse layer around a validated artifact. Give it the measured EPS state, the prior 300 ms of
+commands, a short future sequence of model-derived commands, and matching desired steering angles. It searches the learned response
+for a lower-error, time-shaped C0/C1/C3 plan along command combinations observed on that vehicle while enforcing DBC quantization,
+the Ford coefficient envelope, learned joint support, and PSCM-limit penalty. A live caller must provide a causal forecast from the
+current model cycle; recorded future yaw, acceleration, torque, or EPS state must never be fed into a deployed plan. C2 is preserved
+by default because its PSCM response is slow and persistent. The planner is rerun
+every 50 ms and only its first command should be used. `--planner-output` evaluates aggregate error, first-step error, OOD rejection,
+and predicted limit incidence across complete held-out routes. These are virtual-EPS predictions, not road-test results; guarded road
+testing remains required before any live integration. The report labels this explicitly as
+`virtual_eps_internal_objective_only`: it uses future logged commands/desired angles as an oracle while holding current environmental
+telemetry constant, so it proves optimizer/model self-consistency—not deployable receding-horizon or independent EPS performance.
 
 ## Jupyter notebooks
 

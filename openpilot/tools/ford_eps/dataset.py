@@ -11,6 +11,13 @@ from openpilot.tools.lib.logreader import LogReader
 
 FORD_DBC = "ford_lincoln_base_pt"
 LMC2 = "LateralMotionControl2"
+FORD_LMC2_COEFFICIENT_SCHEMA = {
+  "c0": (-5.12, 5.11, 0.01),
+  "c1": (-0.5, 0.5235, 0.0005),
+  # The DBC encodes C2 through 0.02094, but Panda caps active Ford steering at 0.02000.
+  "c2": (-0.02, 0.02, 0.00002),
+  "c3": (-0.001024, 0.001023, 0.000001),
+}
 DATASET_VERSION = 2
 MAX_SAMPLE_AGE_NS = 100_000_000
 SAMPLE_PERIOD_NS = 50_000_000
@@ -156,6 +163,24 @@ def sample_from_input(inputs: FordEpsInput, mono_time_ns: int = 0) -> np.void:
   ):
     sample[field] = getattr(inputs, field)
   return sample
+
+
+def input_from_sample(sample: np.void) -> FordEpsInput:
+  """Build a counterfactual input while retaining the sample's observed environment."""
+  return FordEpsInput(
+    c0=float(sample["c0"]),
+    c1=float(sample["c1"]),
+    c2=float(sample["c2"]),
+    c3=float(sample["c3"]),
+    speed_mps=float(sample["speed_mps"]),
+    yaw_rate_rad_s=float(sample["yaw_rate_rad_s"]),
+    lateral_accel_mps2=float(sample["lateral_accel_mps2"]),
+    longitudinal_accel_mps2=float(sample["longitudinal_accel_mps2"]),
+    eps_voltage_v=float(sample["eps_voltage_v"]),
+    column_torque_nm=float(sample["column_torque_nm"]),
+    driver_torque_nm=float(sample["driver_torque_nm"]),
+    lat_active=bool(sample["lat_active"]),
+  )
 
 
 def _normalize_to_20hz(samples: np.ndarray) -> np.ndarray:
