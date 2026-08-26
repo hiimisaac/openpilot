@@ -40,6 +40,19 @@ def test_describes_intersection_turn_from_stop():
   assert path.path_angle > 0.0
 
 
+def test_moving_does_not_pack_far_path_wiggle():
+  # 6 m/s straight with a 3 m wander at 2 s — that is model noise, not a turn.
+  t = np.linspace(0.0, 2.0, 21)
+  x = 6.0 * t
+  y = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.04, 3.0])
+  psi = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.01, 0.4])
+  path = encode_ford_path(_model(t, x, y, psi), T_PREV)
+
+  assert path.valid
+  assert abs(path.path_offset) < 0.2
+  assert abs(path.path_angle) < 0.05
+
+
 def test_left_path_is_positive():
   t = np.array([0.0, 0.2, 1.0])
   path = encode_ford_path(_model(t, [0.0, 1.0, 5.0], [0.0, 0.4, 2.0], [0.0, 0.1, 0.4]), T_PREV)

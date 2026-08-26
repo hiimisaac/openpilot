@@ -11,6 +11,7 @@ DBC_CURVATURE = (-0.02, 0.02)
 DBC_CURVATURE_RATE = (-0.001024, 0.001023)
 
 T_WALK_MAX = 2.0
+_STILL_S = 0.5
 
 
 @dataclass(frozen=True)
@@ -28,10 +29,6 @@ def _clip(value: float, limits: tuple[float, float]) -> float:
 
 def _finite(value: float) -> float:
   return float(value) if math.isfinite(value) else 0.0
-
-
-def _score(y: float, psi: float) -> float:
-  return abs(y) / DBC_OFFSET[1] + abs(psi) / DBC_ANGLE[1]
 
 
 def _times(model, n: int) -> np.ndarray | None:
@@ -62,23 +59,15 @@ def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> Fo
     return inactive
 
   heading = np.unwrap(psi)
+  ds = np.hypot(np.diff(x, prepend=x[0]), np.diff(y, prepend=y[0]))
+  ds[0] = 0.0
+  dist = np.cumsum(ds)
+
   t_lo = float(np.clip(t_prev, times[0], times[-1]))
   t_hi = min(T_WALK_MAX, float(times[-1]))
-  y_s = float(np.interp(t_lo, times, y))
-  psi_s = float(np.interp(t_lo, times, heading))
-  best = _score(y_s, psi_s)
-  for t_i, y_i, psi_i in zip(times, y, heading, strict=True):
-    if t_i < t_lo or t_i > t_hi:
-      continue
-    sc = _score(float(y_i), float(psi_i))
-    if sc > best:
-      best = sc
-      y_s = float(y_i)
-      psi_s = float(psi_i)
-  y_h = float(np.interp(t_hi, times, y))
-  psi_h = float(np.interp(t_hi, times, heading))
-  if _score(y_h, psi_h) > best:
-    y_s, psi_s = y_h, psi_h
+  t_star = t_hi if float(np.interp(t_lo, times, dist)) < _STILL_S else t_lo
+  y_s = float(np.interp(t_star, times, y))
+  psi_s = float(np.interp(t_star, times, heading))
 
   return FordPath(
     valid=True,
