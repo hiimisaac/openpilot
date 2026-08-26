@@ -884,6 +884,7 @@ struct ControlsState @0x97ff69c53601abf1 {
     torqueState @60 :LateralTorqueState;
 
     curvatureState @65 :LateralCurvatureState;
+    lmc2State @67 :LateralLMC2State;
     lqrStateDEPRECATED @55 :Deprecated.LateralLQRState;
     indiStateDEPRECATED @52 :Deprecated.LateralINDIState;
   }
@@ -942,6 +943,21 @@ struct ControlsState @0x97ff69c53601abf1 {
     f @6 :Float32;
     output @7 :Float32;
     saturated @8 :Bool;
+  }
+
+  struct LateralLMC2State {
+    active @0 :Bool;
+    validMeas @1 :Bool;
+    eY @2 :Float32;             # m, y-left
+    ePsi @3 :Float32;           # rad
+    kappaRoad @4 :Float32;      # 1/m
+    kappaRoadDot @5 :Float32;   # 1/m^2
+    kappaFf @6 :Float32;        # 1/m
+    kappaFb @7 :Float32;        # 1/m after limiter
+    kappaCmd @8 :Float32;       # 1/m = c2 of y_cmd
+    kY @9 :Float32;             # 1/m^2
+    kPsi @10 :Float32;          # 1/m
+    saturated @11 :Bool;        # DBC clip
   }
 
   deprecated :group {

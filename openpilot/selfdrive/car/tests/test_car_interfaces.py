@@ -61,7 +61,10 @@ class TestCarInterfaces(OpenpilotTestCase):
     # Test controller initialization
     # TODO: wait until card refactor is merged to run controller a few times
     LongControl(car_params)
-    if car_params.steerControlType in (CarParams.SteerControlType.angle, CarParams.SteerControlType.path):
+    if car_params.brand == "ford":
+      from openpilot.selfdrive.controls.lib.latcontrol_lmc2 import LatControlLMC2
+      LatControlLMC2(car_params, car_interface, DT_CTRL)
+    elif car_params.steerControlType in (CarParams.SteerControlType.angle, CarParams.SteerControlType.path):
       LatControlAngle(car_params, car_interface, DT_CTRL)
     elif car_params.lateralTuning.which() == 'pid':
       LatControlPID(car_params, car_interface, DT_CTRL)

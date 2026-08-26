@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import math
 import os
 import time
 import threading
@@ -17,7 +18,6 @@ from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallabl
 from opendbc.car.carlog import carlog
 from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
-from opendbc.car.ford.learned_lateral_path import LearnedLateralPathCommand, lmc2_control_utilization
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
@@ -62,17 +62,32 @@ def can_comm_callbacks(logcan: messaging.SubSocket, sendcan: messaging.PubSocket
   return can_recv, can_send
 
 
+_DBC_PATH_LIMITS = ((-5.12, 5.11), (-0.5, 0.5235), (-0.02, 0.02), (-0.001024, 0.001023))
+
+
 def ford_lmc2_control_state(CP: car.CarParams, ford_car_state, actuators: car.CarControl.Actuators,
                             lat_active: bool) -> tuple[float, int]:
-  """Build UI-only Ford LMC2 telemetry from the command actually sent and PSCM status."""
+  """Build UI-only Ford LMC2 telemetry from the packed poly and PSCM status."""
   if CP.brand != "ford" or CP.steerControlType != car.CarParams.SteerControlType.path or not lat_active:
     return 0.0, 0
 
   limit = int(getattr(ford_car_state, "lat_ctl_limit", 0))
   limit = limit if 0 <= limit < len(FORD_LMC2_LIMIT_NAMES) else 0
   path = actuators.lateralPath
-  command = LearnedLateralPathCommand(path.valid, path.pathOffset, path.pathAngle, path.curvature, path.curvatureRate)
-  return lmc2_control_utilization(command, limit), limit
+  coeffs = (path.pathOffset, path.pathAngle, path.curvature, path.curvatureRate)
+  mags = []
+  for value, (lo, hi) in zip(coeffs, _DBC_PATH_LIMITS, strict=True):
+    den = hi if value >= 0.0 else abs(lo)
+    mags.append(abs(value) / den if den else 0.0)
+  magnitude = float(min(1.0, max(mags, default=0.0)))
+  if magnitude == 0.0:
+    return 0.0, limit
+  if limit == 1:
+    magnitude = max(magnitude, 0.8)
+  elif limit == 2:
+    magnitude = 1.0
+  direction = path.curvature if abs(path.curvature) > 1e-9 else coeffs[int(max(range(4), key=lambda i: mags[i]))]
+  return math.copysign(magnitude, direction), limit
 
 
 class Car:
@@ -128,8 +143,6 @@ class Car:
     self.CP.alternativeExperience = 0
     if is_mads_available(self.CP) and self.params.get_bool("MadsEnabled"):
       self.CP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.ENABLE_MADS
-    if self.CP.brand == "ford" and self.CI.CC is not None and hasattr(self.CI.CC, "set_adaptive_lateral_enabled"):
-      self.CI.CC.set_adaptive_lateral_enabled(self.params.get_bool("FordAdaptiveLateral"))
     openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
     controller_available = self.CI.CC is not None and openpilot_enabled_toggle and not self.CP.dashcamOnly
     self.CP.passive = not controller_available or self.CP.dashcamOnly
@@ -236,13 +249,6 @@ class Car:
       lmc2_send.valid = co_send.valid
       lmc2_send.fordLmc2ControlState.utilization = utilization
       lmc2_send.fordLmc2ControlState.limit = FORD_LMC2_LIMIT_NAMES[limit]
-      adaptive_state = getattr(self.CI.CC, "adaptive_lateral_state", None)
-      if adaptive_state is not None:
-        lmc2_send.fordLmc2ControlState.adaptiveEnabled = adaptive_state.enabled
-        lmc2_send.fordLmc2ControlState.adaptiveGain = adaptive_state.gain
-        lmc2_send.fordLmc2ControlState.adaptiveReferenceCurvature = adaptive_state.reference_curvature
-        lmc2_send.fordLmc2ControlState.adaptiveTrackingError = adaptive_state.tracking_error
-        lmc2_send.fordLmc2ControlState.adapting = adaptive_state.adapting
       self.pm.send('fordLmc2ControlState', lmc2_send)
 
     # kick off controlsd step while we actuate the latest carControl packet

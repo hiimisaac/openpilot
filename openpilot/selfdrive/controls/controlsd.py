@@ -17,8 +17,10 @@ from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
+from openpilot.selfdrive.controls.lib.latcontrol_lmc2 import LatControlLMC2, PathCommand, path_command, path_at_dbc_limit
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.lateral_path import model_lateral_path
+from openpilot.selfdrive.controls.lib.lmc2_path import path_to_lmc_states
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.car.mads import is_mads_lateral_only
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
@@ -29,7 +31,7 @@ LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
-ANGLE_OUTPUT_TYPES = (car.CarParams.SteerControlType.angle, car.CarParams.SteerControlType.path)
+ANGLE_OUTPUT_TYPES = (car.CarParams.SteerControlType.angle,)
 
 
 class Controls:
@@ -56,7 +58,9 @@ class Controls:
     self.LoC = LongControl(self.CP)
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
-    if self.CP.steerControlType in ANGLE_OUTPUT_TYPES:
+    if self.CP.brand == "ford":
+      self.LaC = LatControlLMC2(self.CP, self.CI, DT_CTRL)
+    elif self.CP.steerControlType in ANGLE_OUTPUT_TYPES:
       self.LaC = LatControlAngle(self.CP, self.CI, DT_CTRL)
     elif self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
       self.LaC = LatControlCurvature(self.CP, self.CI, DT_CTRL)
@@ -124,31 +128,50 @@ class Controls:
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
 
     # Steering PID loop and lateral MPC
-    # Reset desired curvature to current to avoid violating the limits on engage
-    if self.sm.valid['lateralManeuverPlan']:
-      new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
-    else:
-      new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
-    self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["lateralDelay"].lateralDelay + LAT_SMOOTH_SECONDS
-
-    actuators.curvature = self.desired_curvature
-    steer, lateral_output, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
-                                                     self.steer_limited_by_safety, self.desired_curvature,
-                                                     curvature_limited, lat_delay)
-    actuators.torque = float(steer)
-    if self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
-      actuators.curvature = float(lateral_output)
+    if self.CP.brand == "ford":
+      meas = path_to_lmc_states(
+        self.sm['modelV2'].position.x if self.sm.valid['modelV2'] else [],
+        self.sm['modelV2'].position.y if self.sm.valid['modelV2'] else [],
+      )
+      steer, _, lac_log = self.LaC.update(
+        CC.latActive, CS, self.VM, lp,
+        self.steer_limited_by_safety, 0.0, False, lat_delay, meas=meas)
+      pc = path_command(meas, lac_log.kappaCmd, CC.latActive)
+      actuators.lateralPath.valid = pc.valid
+      actuators.lateralPath.pathOffset = float(pc.pathOffset)
+      actuators.lateralPath.pathAngle = float(pc.pathAngle)
+      actuators.lateralPath.curvature = float(pc.curvature)
+      actuators.lateralPath.curvatureRate = float(pc.curvatureRate)
+      actuators.steeringAngleDeg = 0.0
+      actuators.torque = float(steer)
+      actuators.curvature = float(pc.curvature)
+      self.desired_curvature = float(pc.curvature)
     else:
-      actuators.steeringAngleDeg = float(lateral_output)
-    if self.CP.steerControlType == car.CarParams.SteerControlType.path:
-      path = model_lateral_path(model_v2 if self.sm.valid['modelV2'] else None,
-                                actuators.curvature, CS.vEgo)
-      actuators.lateralPath.valid = path.valid
-      actuators.lateralPath.pathOffset = path.path_offset
-      actuators.lateralPath.pathAngle = path.path_angle
-      actuators.lateralPath.curvature = path.curvature
-      actuators.lateralPath.curvatureRate = path.curvature_rate
+      # Reset desired curvature to current to avoid violating the limits on engage
+      if self.sm.valid['lateralManeuverPlan']:
+        new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
+      else:
+        new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+      self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
+
+      actuators.curvature = self.desired_curvature
+      steer, lateral_output, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
+                                                       self.steer_limited_by_safety, self.desired_curvature,
+                                                       curvature_limited, lat_delay)
+      actuators.torque = float(steer)
+      if self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
+        actuators.curvature = float(lateral_output)
+      else:
+        actuators.steeringAngleDeg = float(lateral_output)
+      if self.CP.steerControlType == car.CarParams.SteerControlType.path:
+        path = model_lateral_path(model_v2 if self.sm.valid['modelV2'] else None,
+                                  actuators.curvature, CS.vEgo)
+        actuators.lateralPath.valid = path.valid
+        actuators.lateralPath.pathOffset = path.path_offset
+        actuators.lateralPath.pathAngle = path.path_angle
+        actuators.lateralPath.curvature = path.curvature
+        actuators.lateralPath.curvatureRate = path.curvature_rate
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)
@@ -191,7 +214,11 @@ class Controls:
 
     if self.sm['selfdriveState'].active:
       CO = self.sm['carOutput']
-      if self.CP.steerControlType in ANGLE_OUTPUT_TYPES:
+      if self.CP.brand == "ford":
+        path = CC.actuators.lateralPath
+        self.steer_limited_by_safety = path_at_dbc_limit(PathCommand(
+          path.valid, path.pathOffset, path.pathAngle, path.curvature, path.curvatureRate))
+      elif self.CP.steerControlType in ANGLE_OUTPUT_TYPES:
         self.steer_limited_by_safety = abs(CC.actuators.steeringAngleDeg - CO.actuatorsOutput.steeringAngleDeg) > \
                                               STEER_ANGLE_SATURATION_THRESHOLD
       else:
@@ -220,7 +247,9 @@ class Controls:
     CC.driverMonitoringEscalation = cs.forceDecel
 
     lat_tuning = self.CP.lateralTuning.which()
-    if self.CP.steerControlType in ANGLE_OUTPUT_TYPES:
+    if self.CP.brand == "ford":
+      cs.lateralControlState.lmc2State = lac_log
+    elif self.CP.steerControlType in ANGLE_OUTPUT_TYPES:
       cs.lateralControlState.angleState = lac_log
     elif self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
       cs.lateralControlState.curvatureState = lac_log
