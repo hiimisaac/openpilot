@@ -44,7 +44,7 @@ def _times(model, n: int) -> np.ndarray | None:
   return t if t.size == n else None
 
 
-def encode_ford_path(model, t_prev: float) -> FordPath:
+def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> FordPath:
   inactive = FordPath()
   if model is None:
     return inactive
@@ -78,7 +78,6 @@ def encode_ford_path(model, t_prev: float) -> FordPath:
   moving = np.concatenate(([True], np.diff(dist) > 1e-3))
   path_dist = dist[moving]
   path_heading = heading[moving]
-  kappa = 0.0
   kappa_rate = 0.0
   if path_dist.size >= 3:
     local = np.abs(path_dist - s_star) <= LOOKAHEAD_S
@@ -86,10 +85,9 @@ def encode_ford_path(model, t_prev: float) -> FordPath:
       # A quadratic heading fit gives curvature and curvature rate at the same
       # reference point while rejecting point-to-point model noise.
       heading_poly = np.polynomial.polynomial.polyfit(path_dist[local] - s_star, path_heading[local], 2)
-      kappa = float(heading_poly[1])
       kappa_rate = float(2.0 * heading_poly[2])
   turn = abs(y_s) >= _C2_OFFSET or abs(psi_s) >= _C2_ANGLE
-  kappa = 0.0 if turn else _finite(kappa)
+  kappa = 0.0 if turn else _finite(desired_curvature)
 
   return FordPath(
     valid=True,

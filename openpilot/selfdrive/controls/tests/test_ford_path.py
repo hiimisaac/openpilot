@@ -126,34 +126,31 @@ def test_keeps_c2_centering_with_continuous_shallow_path():
   x = 20.0 * t
   y = 0.5 * 0.003 * x * x
   psi = 0.003 * x
-  path = encode_ford_path(_model(t, x, y, psi), T_PREV)
+  path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.003)
 
   assert path.path_offset > 0.0
   assert path.path_angle > 0.0
   assert path.curvature == 0.001
 
 
-def test_c2_uses_same_model_path_as_c0_c1():
+def test_c2_uses_desired_curvature_for_centering():
   t = np.linspace(0.0, 2.0, 21)
   radius = 1000.0
   theta = 10.0 * t / radius
-  path = encode_ford_path(_model(t, radius * np.sin(theta), radius * (1.0 - np.cos(theta)), theta), T_PREV)
+  path = encode_ford_path(_model(t, radius * np.sin(theta), radius * (1.0 - np.cos(theta)), theta), T_PREV, -0.0006)
 
   assert path.path_offset > 0.0
   assert path.path_angle > 0.0
-  assert path.curvature == 0.001
+  assert path.curvature == -0.0006
 
 
 def test_c3_describes_curvature_change_at_same_path_sample():
   t = np.linspace(0.0, 2.0, 41)
   s = 10.0 * t
-  curvature = 0.0005 + 0.00005 * s
   psi = 0.0005 * s + 0.5 * 0.00005 * s * s
   y = np.cumsum(np.pad(np.diff(s) * 0.5 * (np.tan(psi[1:]) + np.tan(psi[:-1])), (1, 0)))
   path = encode_ford_path(_model(t, s, y, psi), T_PREV)
 
-  expected_curvature = float(np.interp(7.0, s, curvature))
-  assert np.isclose(path.curvature, expected_curvature, atol=2e-6)
   assert np.isclose(path.curvature_rate, 0.00005, atol=2e-6)
 
 
@@ -162,7 +159,7 @@ def test_c3_previews_c2_unwind_from_same_path_segment():
   s = 10.0 * t
   psi = 0.001 * s - 0.5 * 0.0001 * s * s
   y = np.cumsum(np.pad(np.diff(s) * 0.5 * (np.tan(psi[1:]) + np.tan(psi[:-1])), (1, 0)))
-  path = encode_ford_path(_model(t, s, y, psi), T_PREV)
+  path = encode_ford_path(_model(t, s, y, psi), T_PREV, 0.0003)
 
   assert path.curvature > 0.0
   assert np.isclose(path.curvature_rate, -0.0001, atol=2e-6)
@@ -179,16 +176,16 @@ def test_c3_tracks_path_trend_without_amplifying_sample_noise():
   assert np.isclose(path.curvature_rate, 0.00005, atol=1e-5)
 
 
-def test_keeps_geometric_c2_for_lane_wander_with_continuous_path_feedback():
+def test_keeps_c2_for_lane_wander_with_continuous_path_feedback():
   t = np.linspace(0.0, 2.0, 21)
   x = 16.0 * t
   y = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.04, 0.18])
   psi = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.005, 0.02])
-  path = encode_ford_path(_model(t, x, y, psi), T_PREV)
+  path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.001)
 
   assert 0.0 < path.path_offset < 0.3
   assert 0.0 < path.path_angle < 0.05
-  assert 0.0 < path.curvature < 0.001
+  assert path.curvature == 0.001
 
 
 def test_clips_to_dbc_range():
