@@ -13,6 +13,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.ford_path import encode_ford_path
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -124,7 +125,11 @@ class Controls:
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
-    self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
+    if self.CP.brand == "ford":
+      self.desired_curvature = float(new_desired_curvature)
+      curvature_limited = False
+    else:
+      self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["lateralDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
     actuators.curvature = self.desired_curvature
@@ -136,6 +141,15 @@ class Controls:
       actuators.curvature = float(lateral_output)
     else:
       actuators.steeringAngleDeg = float(lateral_output)
+    if self.CP.brand == "ford":
+      path = encode_ford_path(model_v2 if self.sm.valid['modelV2'] else None,
+                              self.CP.steerActuatorDelay, self.desired_curvature)
+      actuators.lateralPath.valid = path.valid
+      actuators.lateralPath.pathOffset = float(path.path_offset)
+      actuators.lateralPath.pathAngle = float(path.path_angle)
+      actuators.lateralPath.curvature = float(path.curvature)
+      actuators.lateralPath.curvatureRate = float(path.curvature_rate)
+      actuators.curvature = float(path.curvature)
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)
