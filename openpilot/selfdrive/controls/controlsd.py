@@ -18,7 +18,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
-from openpilot.selfdrive.controls.lib.lateral_path import model_lateral_path
+from openpilot.selfdrive.controls.lib.lateral_path import PersistentLateralPath
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.car.mads import is_mads_lateral_only
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
@@ -49,6 +49,7 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.lateral_reference = PersistentLateralPath()
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -142,13 +143,23 @@ class Controls:
     else:
       actuators.steeringAngleDeg = float(lateral_output)
     if self.CP.steerControlType == car.CarParams.SteerControlType.path:
-      path = model_lateral_path(model_v2 if self.sm.valid['modelV2'] else None,
-                                actuators.curvature, CS.vEgo, actuators.steeringAngleDeg)
+      path = self.lateral_reference.update(
+        model_v2 if self.sm.valid['modelV2'] else None,
+        active=CC.latActive,
+        mono_time_ns=self.sm.logMonoTime['carState'],
+        v_ego=CS.vEgo,
+        # Ford's reported yaw rate has the opposite sign from model path curvature.
+        yaw_rate=-CS.yawRate,
+      )
       actuators.lateralPath.valid = path.valid
       actuators.lateralPath.pathOffset = path.path_offset
       actuators.lateralPath.pathAngle = path.path_angle
       actuators.lateralPath.curvature = path.curvature
       actuators.lateralPath.curvatureRate = path.curvature_rate
+      # Never send an active all-zero LMC2 tuple when the reference expires.
+      # Model/pose recovery can re-enable lateral control on a later cycle.
+      if not path.valid:
+        CC.latActive = False
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)
