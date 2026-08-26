@@ -53,6 +53,30 @@ def test_moving_samples_along_track_not_two_seconds():
   assert abs(path.path_offset) < abs(np.interp(2.0, t, y)) - 0.5
 
 
+def test_speed_uses_one_common_path_reference():
+  t = np.linspace(0.0, 3.0, 61)
+  x = 10.0 * t
+  y = 0.001 * x * x
+  psi = 0.002 * x
+  path = encode_ford_path(_model(t, x, y, psi), T_PREV, v_ego=18.0)
+
+  assert np.isclose(path.path_offset, np.interp(18.0, x, y), atol=0.01)
+  assert np.isclose(path.path_angle, np.interp(18.0, x, psi), atol=0.001)
+
+
+def test_speed_reference_unloads_c2_for_upcoming_turn():
+  t = np.linspace(0.0, 3.0, 61)
+  x = 10.0 * t
+  y = 0.001 * x * x
+  psi = 0.002 * x
+
+  short_path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.001)
+  speed_path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.001, v_ego=18.0)
+
+  assert short_path.curvature == 0.001
+  assert speed_path.curvature == 0.0
+
+
 def test_keeps_describing_a_turn_after_leaving_the_stop():
   R, v = 15.0, 4.0
   t = np.linspace(0.0, 5.0, 51)

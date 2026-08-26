@@ -11,7 +11,9 @@ DBC_CURVATURE = (-0.02, 0.02)
 DBC_CURVATURE_RATE = (-0.001024, 0.001023)
 
 T_WALK_MAX = 2.0
-LOOKAHEAD_S = 7.0
+MIN_LOOKAHEAD_S = 7.0
+LOOKAHEAD_T = 1.0
+PATH_FIT_HALF_WIDTH = 7.0
 # C2 is LPF'd in the PSCM, so keep it small enough to remain a centering trim.
 # C0/C1 always describe the path from the same sample and handle fast motion.
 _C2_OFFSET = 0.3
@@ -44,7 +46,7 @@ def _times(model, n: int) -> np.ndarray | None:
   return t if t.size == n else None
 
 
-def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> FordPath:
+def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0, *, v_ego: float = 0.0) -> FordPath:
   inactive = FordPath()
   if model is None:
     return inactive
@@ -70,7 +72,8 @@ def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> Fo
 
   t_lo = float(np.clip(t_prev, times[0], times[-1]))
   t_hi = min(T_WALK_MAX, float(times[-1]))
-  t_star = float(np.interp(LOOKAHEAD_S, dist, times))
+  lookahead_s = max(_finite(v_ego) * LOOKAHEAD_T, MIN_LOOKAHEAD_S)
+  t_star = float(np.interp(lookahead_s, dist, times))
   t_star = float(np.clip(t_star, t_lo, t_hi))
   s_star = float(np.interp(t_star, times, dist))
   y_s = float(np.interp(t_star, times, y))
@@ -80,7 +83,7 @@ def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> Fo
   path_heading = heading[moving]
   kappa_rate = 0.0
   if path_dist.size >= 3:
-    local = np.abs(path_dist - s_star) <= LOOKAHEAD_S
+    local = np.abs(path_dist - s_star) <= PATH_FIT_HALF_WIDTH
     if np.count_nonzero(local) >= 3:
       # A quadratic heading fit gives curvature and curvature rate at the same
       # reference point while rejecting point-to-point model noise.
