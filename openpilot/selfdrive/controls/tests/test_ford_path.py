@@ -40,17 +40,29 @@ def test_describes_intersection_turn_from_stop():
   assert path.path_angle > 0.0
 
 
-def test_moving_does_not_pack_far_path_wiggle():
-  # 6 m/s straight with a 3 m wander at 2 s — that is model noise, not a turn.
-  t = np.linspace(0.0, 2.0, 21)
-  x = 6.0 * t
+def test_moving_samples_along_track_not_two_seconds():
+  t = np.linspace(0.0, 3.0, 31)
+  x = 10.0 * t
   y = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.04, 3.0])
   psi = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.01, 0.4])
   path = encode_ford_path(_model(t, x, y, psi), T_PREV)
 
+  y_7m = float(np.interp(0.7, t, y))
   assert path.valid
-  assert abs(path.path_offset) < 0.2
-  assert abs(path.path_angle) < 0.05
+  assert abs(path.path_offset - y_7m) < 0.15
+  assert abs(path.path_offset) < abs(np.interp(2.0, t, y)) - 0.5
+
+
+def test_keeps_describing_a_turn_after_leaving_the_stop():
+  R, v = 15.0, 4.0
+  t = np.linspace(0.0, 5.0, 51)
+  s = v * t
+  th = np.minimum(s / R, 0.5 * np.pi)
+  path = encode_ford_path(_model(t, R * np.sin(th), R * (1.0 - np.cos(th)), th), T_PREV, 1.0 / R)
+
+  bumper = float(np.interp(T_PREV, t, R * (1.0 - np.cos(th))))
+  assert path.path_offset > 1.0
+  assert path.path_offset > 5.0 * bumper
 
 
 def test_left_path_is_positive():
@@ -98,6 +110,29 @@ def test_does_not_invent_path_when_plan_stays_at_origin():
   assert path.path_angle == 0.0
 
 
+def test_does_not_charge_c2_during_a_path_turn():
+  R, v = 15.0, 4.0
+  t = np.linspace(0.0, 5.0, 51)
+  s = v * t
+  th = np.minimum(s / R, 0.5 * np.pi)
+  path = encode_ford_path(_model(t, R * np.sin(th), R * (1.0 - np.cos(th)), th), T_PREV, 1.0 / R)
+
+  assert abs(path.path_offset) > 1.0
+  assert path.curvature == 0.0
+
+
+def test_packs_c2_only_on_a_shallow_curve():
+  t = np.linspace(0.0, 2.0, 21)
+  x = 20.0 * t
+  y = 0.5 * 0.003 * x * x
+  psi = 0.003 * x
+  path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.003)
+
+  assert abs(path.path_offset) < 0.3
+  assert abs(path.path_angle) < 0.05
+  assert path.curvature == 0.003
+
+
 def test_clips_to_dbc_range():
   t = np.array([0.0, 0.2, 1.0])
   path = encode_ford_path(_model(t, [0.0, 1.0, 5.0], [10.0, 10.0, 10.0], [1.0, 1.0, 1.0],
@@ -105,7 +140,11 @@ def test_clips_to_dbc_range():
 
   assert path.path_offset == 5.11
   assert path.path_angle == 0.5235
-  assert path.curvature == 0.02
+  assert path.curvature == 0.0
+
+  shallow = encode_ford_path(_model(t, [0.0, 4.0, 20.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+                             T_PREV, desired_curvature=0.05)
+  assert shallow.curvature == 0.02
 
 
 def test_invalid_model_is_inactive():

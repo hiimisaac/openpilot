@@ -11,7 +11,11 @@ DBC_CURVATURE = (-0.02, 0.02)
 DBC_CURVATURE_RATE = (-0.001024, 0.001023)
 
 T_WALK_MAX = 2.0
-_STILL_S = 0.5
+LOOKAHEAD_S = 7.0
+# c2 is LPF'd in the PSCM and does not unwind with c0/c1. Only use it for
+# shallow curves; intersection turns live on c0/c1.
+_C2_OFFSET = 0.3
+_C2_ANGLE = 0.05
 
 
 @dataclass(frozen=True)
@@ -65,14 +69,16 @@ def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> Fo
 
   t_lo = float(np.clip(t_prev, times[0], times[-1]))
   t_hi = min(T_WALK_MAX, float(times[-1]))
-  t_star = t_hi if float(np.interp(t_lo, times, dist)) < _STILL_S else t_lo
+  t_star = float(np.interp(LOOKAHEAD_S, dist, times))
+  t_star = float(np.clip(t_star, t_lo, t_hi))
   y_s = float(np.interp(t_star, times, y))
   psi_s = float(np.interp(t_star, times, heading))
+  kappa = _finite(desired_curvature) if abs(y_s) < _C2_OFFSET and abs(psi_s) < _C2_ANGLE else 0.0
 
   return FordPath(
     valid=True,
     path_offset=_clip(y_s, DBC_OFFSET),
     path_angle=_clip(psi_s, DBC_ANGLE),
-    curvature=_clip(_finite(desired_curvature), DBC_CURVATURE),
+    curvature=_clip(kappa, DBC_CURVATURE),
     curvature_rate=_clip(0.0, DBC_CURVATURE_RATE),
   )
