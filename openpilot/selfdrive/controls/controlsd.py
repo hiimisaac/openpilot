@@ -13,7 +13,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
-from openpilot.selfdrive.controls.lib.ford_path import encode_ford_path
+from openpilot.selfdrive.controls.lib.ford_path import FordPathController
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -47,6 +47,7 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.ford_path_controller = FordPathController()
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -142,8 +143,10 @@ class Controls:
     else:
       actuators.steeringAngleDeg = float(lateral_output)
     if self.CP.brand == "ford":
-      path = encode_ford_path(model_v2 if self.sm.valid['modelV2'] else None,
-                              self.CP.steerActuatorDelay, self.desired_curvature, v_ego=CS.vEgo)
+      applied_path = self.sm['carOutput'].actuatorsOutput.lateralPath
+      path = self.ford_path_controller.update(model_v2 if self.sm.valid['modelV2'] else None,
+                                              self.desired_curvature, v_ego=CS.vEgo, active=CC.latActive,
+                                              applied_curvature=applied_path.curvature)
       actuators.lateralPath.valid = path.valid
       actuators.lateralPath.pathOffset = float(path.path_offset)
       actuators.lateralPath.pathAngle = float(path.path_angle)

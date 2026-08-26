@@ -2,233 +2,89 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from openpilot.selfdrive.controls.lib.ford_path import encode_ford_path
+from openpilot.selfdrive.controls.lib.ford_path import FordPathController, encode_ford_path
 
 
-T_PREV = 0.2
-
-
-def _model(t, x, y, psi, yaw_rate=None, desired_curvature=0.0):
-  t = np.asarray(t, dtype=float)
-  x = np.asarray(x, dtype=float)
-  y = np.asarray(y, dtype=float)
-  psi = np.asarray(psi, dtype=float)
-  n = len(t)
-  if yaw_rate is None:
-    yaw_rate = np.gradient(psi, t) if n > 1 else np.zeros(n)
+def _model(curvature_rate=0.0):
+  distance = np.linspace(0.0, 20.0, 41)
+  heading = 0.001 * distance + 0.5 * curvature_rate * distance ** 2
+  y = np.cumsum(np.pad(np.diff(distance) * 0.5 * (np.tan(heading[1:]) + np.tan(heading[:-1])), (1, 0)))
   return SimpleNamespace(
-    position=SimpleNamespace(x=x.tolist(), y=y.tolist(), t=t.tolist()),
-    orientation=SimpleNamespace(z=psi.tolist()),
-    orientationRate=SimpleNamespace(z=np.asarray(yaw_rate, dtype=float).tolist()),
-    action=SimpleNamespace(desiredCurvature=desired_curvature),
+    position=SimpleNamespace(x=distance.tolist(), y=y.tolist()),
+    orientation=SimpleNamespace(z=heading.tolist()),
   )
 
 
-def test_describes_intersection_turn_from_stop():
-  # First in line: launch into a 15 m radius left. The 90 lives at 2–5 s, not 0.2 s.
-  R, a, v_max = 15.0, 1.5, 6.0
-  t = np.linspace(0.0, 10.0, 101)
-  v = np.clip(a * t, 0.0, v_max)
-  s = np.cumsum(np.pad(np.diff(t) * 0.5 * (v[1:] + v[:-1]), (1, 0)))
-  th = np.minimum(s / R, 0.5 * np.pi)
-  path = encode_ford_path(_model(t, R * np.sin(th), R * (1.0 - np.cos(th)), th), T_PREV)
+def test_c2_carries_full_steady_curvature():
+  path = encode_ford_path(_model(), 0.2, 0.01, v_ego=15.0)
 
-  bumper_psi = np.interp(T_PREV, t, th)
   assert path.valid
-  assert abs(path.path_angle) > 5.0 * abs(bumper_psi)
-  assert abs(path.path_offset) > 0.1
+  assert path.curvature > 0.009
   assert path.path_angle > 0.0
 
 
-def test_moving_samples_along_track_not_two_seconds():
-  t = np.linspace(0.0, 3.0, 31)
-  x = 10.0 * t
-  y = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.04, 3.0])
-  psi = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.01, 0.4])
-  path = encode_ford_path(_model(t, x, y, psi), T_PREV)
+def test_c1_drains_as_c2_fills():
+  controller = FordPathController(dt=0.05)
+  first = controller.update(_model(), 0.006, v_ego=15.0)
+  settled = first
+  for _ in range(120):
+    settled = controller.update(_model(), 0.006, v_ego=15.0)
 
-  y_7m = float(np.interp(0.7, t, y))
-  assert path.valid
-  assert abs(path.path_offset - y_7m) < 0.15
-  assert abs(path.path_offset) < abs(np.interp(2.0, t, y)) - 0.5
+  assert first.path_angle > 0.05
+  assert abs(settled.path_angle) < 0.002
 
 
-def test_speed_uses_one_common_path_reference():
-  t = np.linspace(0.0, 3.0, 61)
-  x = 10.0 * t
-  y = 0.001 * x * x
-  psi = 0.002 * x
-  path = encode_ford_path(_model(t, x, y, psi), T_PREV, v_ego=18.0)
+def test_c1_tracks_applied_not_prelimited_c2():
+  controller = FordPathController(dt=0.05)
+  path = controller.update(_model(), 0.01, v_ego=15.0, applied_curvature=0.0)
 
-  assert np.isclose(path.path_offset, np.interp(18.0, x, y), atol=0.01)
-  assert np.isclose(path.path_angle, np.interp(18.0, x, psi), atol=0.001)
+  assert path.curvature > 0.009
+  assert path.path_angle > 0.1
+  assert abs(controller.c2_response) < 1e-8
 
 
-def test_speed_reference_unloads_c2_for_upcoming_turn():
-  t = np.linspace(0.0, 3.0, 61)
-  x = 10.0 * t
-  y = 0.001 * x * x
-  psi = 0.002 * x
+def test_c1_actively_cancels_sticky_c2_on_unwind():
+  controller = FordPathController(dt=0.05)
+  for _ in range(40):
+    controller.update(_model(), 0.01, v_ego=15.0)
 
-  short_path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.001)
-  speed_path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.001, v_ego=18.0)
+  unwind = controller.update(_model(), 0.0, v_ego=15.0)
 
-  assert short_path.curvature == 0.001
-  assert speed_path.curvature == 0.0
+  assert unwind.curvature == 0.0
+  assert unwind.path_angle < -0.05
 
 
-def test_keeps_describing_a_turn_after_leaving_the_stop():
-  R, v = 15.0, 4.0
-  t = np.linspace(0.0, 5.0, 51)
-  s = v * t
-  th = np.minimum(s / R, 0.5 * np.pi)
-  path = encode_ford_path(_model(t, R * np.sin(th), R * (1.0 - np.cos(th)), th), T_PREV)
+def test_s_turn_commands_opposite_fast_channel_before_c2_drains():
+  controller = FordPathController(dt=0.05)
+  for _ in range(20):
+    controller.update(_model(), 0.01, v_ego=8.0)
 
-  bumper = float(np.interp(T_PREV, t, R * (1.0 - np.cos(th))))
-  assert path.path_offset > 1.0
-  assert path.path_offset > 5.0 * bumper
+  reverse = controller.update(_model(), -0.01, v_ego=8.0)
 
-
-def test_left_path_is_positive():
-  t = np.array([0.0, 0.2, 1.0])
-  path = encode_ford_path(_model(t, [0.0, 1.0, 5.0], [0.0, 0.4, 2.0], [0.0, 0.1, 0.4]), T_PREV)
-
-  assert path.path_offset > 0
-  assert path.path_angle > 0
+  assert reverse.curvature < 0.0
+  assert reverse.path_angle < -0.1
 
 
-def test_standstill_walks_time_until_launch_turn():
-  t = np.linspace(0.0, 3.0, 31)
-  x = np.zeros_like(t)
-  y = np.zeros_like(t)
-  psi = np.zeros_like(t)
-  later = t >= 1.0
-  y[later] = np.interp(t[later], [1.0, 2.0], [0.0, 2.0])
-  psi[later] = np.interp(t[later], [1.0, 2.0], [0.0, 0.3])
+def test_c0_is_only_low_speed_c1_overflow():
+  controller = FordPathController(dt=0.05)
+  low_speed = controller.update(_model(), 0.09, v_ego=4.0)
+  high_speed = FordPathController(dt=0.05).update(_model(), 0.09, v_ego=15.0)
 
-  path = encode_ford_path(_model(t, x, y, psi), T_PREV)
-
-  assert path.valid
-  assert path.path_offset > 0.0
-  assert path.path_angle > 0.0
-  assert path.path_offset <= 2.0 + 1e-9
+  assert low_speed.path_angle == 0.5235
+  assert low_speed.path_offset > 0.0
+  assert high_speed.path_offset == 0.0
 
 
-def test_does_not_sample_the_exit_of_a_turn():
-  t = np.linspace(0.0, 3.0, 31)
-  y = np.where(t <= 0.5, 0.4 + 0.2 * t, np.interp(t, [0.5, 2.0], [0.5, 0.0]))
-  psi = np.where(t <= 0.5, 0.12, np.interp(t, [0.5, 2.0], [0.12, 0.0]))
-  path = encode_ford_path(_model(t, 10.0 * t, y, psi), T_PREV)
-
-  assert path.path_offset > 0.3
-  assert path.path_angle > 0.05
-  assert path.path_offset > np.interp(2.0, t, y) + 0.2
-
-
-def test_does_not_invent_path_when_plan_stays_at_origin():
-  t = np.linspace(0.0, 4.0, 21)
-  path = encode_ford_path(_model(t, np.zeros_like(t), np.zeros_like(t), np.zeros_like(t)), T_PREV)
-
-  assert path.valid
-  assert path.path_offset == 0.0
-  assert path.path_angle == 0.0
-
-
-def test_does_not_charge_c2_during_a_path_turn():
-  R, v = 15.0, 4.0
-  t = np.linspace(0.0, 5.0, 51)
-  s = v * t
-  th = np.minimum(s / R, 0.5 * np.pi)
-  path = encode_ford_path(_model(t, R * np.sin(th), R * (1.0 - np.cos(th)), th), T_PREV)
-
-  assert abs(path.path_offset) > 1.0
-  assert path.curvature == 0.0
-
-
-def test_keeps_c2_centering_with_continuous_shallow_path():
-  t = np.linspace(0.0, 2.0, 21)
-  x = 20.0 * t
-  y = 0.5 * 0.003 * x * x
-  psi = 0.003 * x
-  path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.003)
-
-  assert path.path_offset > 0.0
-  assert path.path_angle > 0.0
-  assert path.curvature == 0.001
-
-
-def test_c2_uses_desired_curvature_for_centering():
-  t = np.linspace(0.0, 2.0, 21)
-  radius = 1000.0
-  theta = 10.0 * t / radius
-  path = encode_ford_path(_model(t, radius * np.sin(theta), radius * (1.0 - np.cos(theta)), theta), T_PREV, -0.0006)
-
-  assert path.path_offset > 0.0
-  assert path.path_angle > 0.0
-  assert path.curvature == -0.0006
-
-
-def test_c3_describes_curvature_change_at_same_path_sample():
-  t = np.linspace(0.0, 2.0, 41)
-  s = 10.0 * t
-  psi = 0.0005 * s + 0.5 * 0.00005 * s * s
-  y = np.cumsum(np.pad(np.diff(s) * 0.5 * (np.tan(psi[1:]) + np.tan(psi[:-1])), (1, 0)))
-  path = encode_ford_path(_model(t, s, y, psi), T_PREV)
+def test_c3_is_spatial_curvature_slope():
+  path = encode_ford_path(_model(0.00005), 0.2, 0.001, v_ego=12.0)
 
   assert np.isclose(path.curvature_rate, 0.00005, atol=2e-6)
 
 
-def test_c3_previews_c2_unwind_from_same_path_segment():
-  t = np.linspace(0.0, 2.0, 41)
-  s = 10.0 * t
-  psi = 0.001 * s - 0.5 * 0.0001 * s * s
-  y = np.cumsum(np.pad(np.diff(s) * 0.5 * (np.tan(psi[1:]) + np.tan(psi[:-1])), (1, 0)))
-  path = encode_ford_path(_model(t, s, y, psi), T_PREV, 0.0003)
+def test_inactive_or_invalid_resets_slow_state():
+  controller = FordPathController(dt=0.05)
+  controller.update(_model(), 0.01, v_ego=12.0)
 
-  assert path.curvature > 0.0
-  assert np.isclose(path.curvature_rate, -0.0001, atol=2e-6)
-
-
-def test_c3_tracks_path_trend_without_amplifying_sample_noise():
-  t = np.linspace(0.0, 2.0, 41)
-  s = 10.0 * t
-  psi = 0.0005 * s + 0.5 * 0.00005 * s * s
-  psi[np.argmin(abs(s - 7.0))] += 0.0005
-  y = np.cumsum(np.pad(np.diff(s) * 0.5 * (np.tan(psi[1:]) + np.tan(psi[:-1])), (1, 0)))
-  path = encode_ford_path(_model(t, s, y, psi), T_PREV)
-
-  assert np.isclose(path.curvature_rate, 0.00005, atol=1e-5)
-
-
-def test_keeps_c2_for_lane_wander_with_continuous_path_feedback():
-  t = np.linspace(0.0, 2.0, 21)
-  x = 16.0 * t
-  y = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.04, 0.18])
-  psi = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.005, 0.02])
-  path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.001)
-
-  assert 0.0 < path.path_offset < 0.3
-  assert 0.0 < path.path_angle < 0.05
-  assert path.curvature == 0.001
-
-
-def test_clips_to_dbc_range():
-  t = np.array([0.0, 0.2, 1.0])
-  path = encode_ford_path(_model(t, [0.0, 1.0, 5.0], [10.0, 10.0, 10.0], [1.0, 1.0, 1.0]), T_PREV)
-
-  assert path.path_offset == 5.11
-  assert path.path_angle == 0.5235
-  assert path.curvature == 0.0
-
-  shallow = encode_ford_path(_model(t, [0.0, 4.0, 20.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]), T_PREV)
-  assert shallow.curvature == 0.0
-
-
-def test_invalid_model_is_inactive():
-  path = encode_ford_path(None, T_PREV)
-
-  assert not path.valid
-  assert path.path_offset == 0.0
-  assert path.path_angle == 0.0
-  assert path.curvature == 0.0
-  assert path.curvature_rate == 0.0
+  assert not controller.update(_model(), 0.0, v_ego=12.0, active=False).valid
+  assert controller.c2_response == 0.0
+  assert not controller.update(None, 0.01, v_ego=12.0).valid
