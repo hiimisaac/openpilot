@@ -72,6 +72,7 @@ def not_(*fns):
 
 procs = [
   DaemonProcess("manage_athenad", "openpilot.system.athena.manage_athenad", "AthenadPid"),
+  PythonProcess("companiond", "openpilot.system.companiond.main", always_run, enabled=COMMA_HARDWARE),
 
   NativeProcess("loggerd", "openpilot/system/loggerd", ["./loggerd"], logging),
   NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], only_onroad),
