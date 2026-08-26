@@ -24,15 +24,20 @@ def _model(t, x, y, psi, yaw_rate=None, desired_curvature=0.0):
   )
 
 
-def test_samples_offset_and_heading_at_actuator_delay():
-  t = np.linspace(0.0, 2.0, 21)
-  y = 2.0 * t
-  psi = np.full_like(t, 0.15)
-  path = encode_ford_path(_model(t, t, y, psi), T_PREV)
+def test_describes_intersection_turn_from_stop():
+  # First in line: launch into a 15 m radius left. The 90 lives at 2–5 s, not 0.2 s.
+  R, a, v_max = 15.0, 1.5, 6.0
+  t = np.linspace(0.0, 10.0, 101)
+  v = np.clip(a * t, 0.0, v_max)
+  s = np.cumsum(np.pad(np.diff(t) * 0.5 * (v[1:] + v[:-1]), (1, 0)))
+  th = np.minimum(s / R, 0.5 * np.pi)
+  path = encode_ford_path(_model(t, R * np.sin(th), R * (1.0 - np.cos(th)), th), T_PREV, 1.0 / R)
 
+  bumper_psi = np.interp(T_PREV, t, th)
   assert path.valid
-  assert path.path_offset == np.interp(T_PREV, t, y)
-  assert path.path_angle == 0.15
+  assert abs(path.path_angle) > 5.0 * abs(bumper_psi)
+  assert abs(path.path_offset) > 0.1
+  assert path.path_angle > 0.0
 
 
 def test_left_path_is_positive():
@@ -57,17 +62,18 @@ def test_standstill_walks_time_until_launch_turn():
   assert path.valid
   assert path.path_offset > 0.0
   assert path.path_angle > 0.0
-  assert path.path_offset < 2.0  # first content, not the far exit
+  assert path.path_offset <= 2.0 + 1e-9
 
 
-def test_does_not_walk_past_a_turn_already_at_delay():
+def test_does_not_sample_the_exit_of_a_turn():
   t = np.linspace(0.0, 3.0, 31)
   y = np.where(t <= 0.5, 0.4 + 0.2 * t, np.interp(t, [0.5, 2.0], [0.5, 0.0]))
   psi = np.where(t <= 0.5, 0.12, np.interp(t, [0.5, 2.0], [0.12, 0.0]))
   path = encode_ford_path(_model(t, 10.0 * t, y, psi), T_PREV)
 
-  assert np.isclose(path.path_offset, np.interp(T_PREV, t, y))
-  assert np.isclose(path.path_angle, np.interp(T_PREV, t, psi))
+  assert path.path_offset > 0.3
+  assert path.path_angle > 0.05
+  assert path.path_offset > np.interp(2.0, t, y) + 0.2
 
 
 def test_does_not_invent_path_when_plan_stays_at_origin():

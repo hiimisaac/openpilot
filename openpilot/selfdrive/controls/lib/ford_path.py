@@ -11,9 +11,6 @@ DBC_CURVATURE = (-0.02, 0.02)
 DBC_CURVATURE_RATE = (-0.001024, 0.001023)
 
 T_WALK_MAX = 2.0
-_EMPTY_Y = 1e-3
-_EMPTY_PSI = 1e-4
-_EMPTY_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -33,12 +30,8 @@ def _finite(value: float) -> float:
   return float(value) if math.isfinite(value) else 0.0
 
 
-def _empty(y: float, psi: float, s: float | None = None) -> bool:
-  if abs(y) > _EMPTY_Y or abs(psi) > _EMPTY_PSI:
-    return False
-  if s is not None and s > _EMPTY_S:
-    return False
-  return True
+def _score(y: float, psi: float) -> float:
+  return abs(y) / DBC_OFFSET[1] + abs(psi) / DBC_ANGLE[1]
 
 
 def _times(model, n: int) -> np.ndarray | None:
@@ -68,25 +61,24 @@ def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> Fo
   if times is None:
     return inactive
 
-  ds = np.hypot(np.diff(x, prepend=x[0]), np.diff(y, prepend=y[0]))
-  ds[0] = 0.0
-  dist = np.cumsum(ds)
   heading = np.unwrap(psi)
-
-  t_star = float(np.clip(t_prev, times[0], min(T_WALK_MAX, times[-1])))
-  y_s = float(np.interp(t_star, times, y))
-  psi_s = float(np.interp(t_star, times, heading))
-  s_s = float(np.interp(t_star, times, dist))
-
-  if _empty(y_s, psi_s, s_s):
-    for t_i, y_i, psi_i in zip(times, y, heading, strict=True):
-      if t_i <= t_star or t_i > T_WALK_MAX:
-        continue
-      if not _empty(float(y_i), float(psi_i)):
-        t_star = float(t_i)
-        y_s = float(y_i)
-        psi_s = float(psi_i)
-        break
+  t_lo = float(np.clip(t_prev, times[0], times[-1]))
+  t_hi = min(T_WALK_MAX, float(times[-1]))
+  y_s = float(np.interp(t_lo, times, y))
+  psi_s = float(np.interp(t_lo, times, heading))
+  best = _score(y_s, psi_s)
+  for t_i, y_i, psi_i in zip(times, y, heading, strict=True):
+    if t_i < t_lo or t_i > t_hi:
+      continue
+    sc = _score(float(y_i), float(psi_i))
+    if sc > best:
+      best = sc
+      y_s = float(y_i)
+      psi_s = float(psi_i)
+  y_h = float(np.interp(t_hi, times, y))
+  psi_h = float(np.interp(t_hi, times, heading))
+  if _score(y_h, psi_h) > best:
+    y_s, psi_s = y_h, psi_h
 
   return FordPath(
     valid=True,
