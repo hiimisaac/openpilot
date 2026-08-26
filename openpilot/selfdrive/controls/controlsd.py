@@ -143,7 +143,7 @@ class Controls:
       actuators.steeringAngleDeg = float(lateral_output)
     if self.CP.steerControlType == car.CarParams.SteerControlType.path:
       path = model_lateral_path(model_v2 if self.sm.valid['modelV2'] else None,
-                                actuators.curvature, CS.vEgo)
+                                actuators.curvature, CS.vEgo, actuators.steeringAngleDeg)
       actuators.lateralPath.valid = path.valid
       actuators.lateralPath.pathOffset = path.path_offset
       actuators.lateralPath.pathAngle = path.path_angle
