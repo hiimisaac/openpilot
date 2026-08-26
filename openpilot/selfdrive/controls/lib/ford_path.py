@@ -12,10 +12,11 @@ DBC_CURVATURE_RATE = (-0.001024, 0.001023)
 
 T_WALK_MAX = 2.0
 LOOKAHEAD_S = 7.0
-# c2 is LPF'd in the PSCM and does not unwind with c0/c1. Only use it for
-# shallow curves; intersection turns live on c0/c1.
+# C2 is LPF'd in the PSCM, so keep it small enough to remain a centering trim.
+# C0/C1 always describe the path from the same sample and handle fast motion.
 _C2_OFFSET = 0.3
 _C2_ANGLE = 0.05
+_C2_MAX = 0.001
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ def _times(model, n: int) -> np.ndarray | None:
   return t if t.size == n else None
 
 
-def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> FordPath:
+def encode_ford_path(model, t_prev: float) -> FordPath:
   inactive = FordPath()
   if model is None:
     return inactive
@@ -71,17 +72,29 @@ def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> Fo
   t_hi = min(T_WALK_MAX, float(times[-1]))
   t_star = float(np.interp(LOOKAHEAD_S, dist, times))
   t_star = float(np.clip(t_star, t_lo, t_hi))
+  s_star = float(np.interp(t_star, times, dist))
   y_s = float(np.interp(t_star, times, y))
   psi_s = float(np.interp(t_star, times, heading))
+  moving = np.concatenate(([True], np.diff(dist) > 1e-3))
+  path_dist = dist[moving]
+  path_heading = heading[moving]
+  kappa = 0.0
+  kappa_rate = 0.0
+  if path_dist.size >= 3:
+    local = np.abs(path_dist - s_star) <= LOOKAHEAD_S
+    if np.count_nonzero(local) >= 3:
+      # A quadratic heading fit gives curvature and curvature rate at the same
+      # reference point while rejecting point-to-point model noise.
+      heading_poly = np.polynomial.polynomial.polyfit(path_dist[local] - s_star, path_heading[local], 2)
+      kappa = float(heading_poly[1])
+      kappa_rate = float(2.0 * heading_poly[2])
   turn = abs(y_s) >= _C2_OFFSET or abs(psi_s) >= _C2_ANGLE
-  if not turn:
-    y_s, psi_s = 0.0, 0.0
-  kappa = 0.0 if turn else _finite(desired_curvature)
+  kappa = 0.0 if turn else _finite(kappa)
 
   return FordPath(
     valid=True,
     path_offset=_clip(y_s, DBC_OFFSET),
     path_angle=_clip(psi_s, DBC_ANGLE),
-    curvature=_clip(kappa, DBC_CURVATURE),
-    curvature_rate=_clip(0.0, DBC_CURVATURE_RATE),
+    curvature=_clip(kappa, (-_C2_MAX, _C2_MAX)),
+    curvature_rate=_clip(_finite(kappa_rate), DBC_CURVATURE_RATE),
   )

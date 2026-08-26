@@ -142,8 +142,7 @@ class Controls:
     else:
       actuators.steeringAngleDeg = float(lateral_output)
     if self.CP.brand == "ford":
-      path = encode_ford_path(model_v2 if self.sm.valid['modelV2'] else None,
-                              self.CP.steerActuatorDelay, self.desired_curvature)
+      path = encode_ford_path(model_v2 if self.sm.valid['modelV2'] else None, self.CP.steerActuatorDelay)
       actuators.lateralPath.valid = path.valid
       actuators.lateralPath.pathOffset = float(path.path_offset)
       actuators.lateralPath.pathAngle = float(path.path_angle)
