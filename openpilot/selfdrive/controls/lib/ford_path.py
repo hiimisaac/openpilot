@@ -73,7 +73,10 @@ def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0) -> Fo
   t_star = float(np.clip(t_star, t_lo, t_hi))
   y_s = float(np.interp(t_star, times, y))
   psi_s = float(np.interp(t_star, times, heading))
-  kappa = _finite(desired_curvature) if abs(y_s) < _C2_OFFSET and abs(psi_s) < _C2_ANGLE else 0.0
+  turn = abs(y_s) >= _C2_OFFSET or abs(psi_s) >= _C2_ANGLE
+  if not turn:
+    y_s, psi_s = 0.0, 0.0
+  kappa = 0.0 if turn else _finite(desired_curvature)
 
   return FordPath(
     valid=True,

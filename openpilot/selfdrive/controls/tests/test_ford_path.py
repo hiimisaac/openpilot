@@ -128,9 +128,21 @@ def test_packs_c2_only_on_a_shallow_curve():
   psi = 0.003 * x
   path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.003)
 
-  assert abs(path.path_offset) < 0.3
-  assert abs(path.path_angle) < 0.05
+  assert path.path_offset == 0.0
+  assert path.path_angle == 0.0
   assert path.curvature == 0.003
+
+
+def test_lane_wander_is_not_an_offset_command():
+  t = np.linspace(0.0, 2.0, 21)
+  x = 16.0 * t
+  y = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.04, 0.18])
+  psi = np.interp(t, [0.0, 0.2, 2.0], [0.0, 0.005, 0.02])
+  path = encode_ford_path(_model(t, x, y, psi), T_PREV, 0.001)
+
+  assert path.path_offset == 0.0
+  assert path.path_angle == 0.0
+  assert path.curvature == 0.001
 
 
 def test_clips_to_dbc_range():
