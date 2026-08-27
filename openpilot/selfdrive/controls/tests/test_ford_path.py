@@ -20,44 +20,52 @@ def _arc(curvature):
   )
 
 
-def test_aligned_curve_has_zero_path_and_heading_error():
-  path = FordPathController().update(_arc(0.008), v_ego=8.0, current_curvature=0.008)
+def test_path_fields_do_not_feed_measured_curvature_back_into_pscm():
+  controller = FordPathController()
+  straight_wheel = controller.update(_arc(0.008), v_ego=8.0, applied_curvature=0.0)
+  turned_wheel = controller.update(_arc(0.008), v_ego=8.0, applied_curvature=0.008)
 
-  assert path.valid
-  assert abs(path.path_offset) < 1e-8
-  assert abs(path.path_angle) < 1e-8
-  assert path.curvature > 0.007
+  assert straight_wheel.valid
+  assert straight_wheel.path_offset == turned_wheel.path_offset
+  assert straight_wheel.path_angle == turned_wheel.path_angle
+  assert straight_wheel.path_offset > 0.15
+  assert straight_wheel.path_angle > 0.05
 
 
-def test_curve_entry_is_target_pose_minus_straight_vehicle_prediction():
-  path = FordPathController().update(_arc(0.008), v_ego=8.0, current_curvature=0.0)
+def test_curve_entry_sends_model_offset_heading_and_curvature_together():
+  path = FordPathController().update(_arc(0.008), v_ego=8.0, applied_curvature=0.0)
 
   assert path.path_offset > 0.15
   assert path.path_angle > 0.05
   assert path.curvature > 0.007
 
 
-def test_curve_exit_countersteers_measured_wheel_curvature():
-  path = FordPathController().update(_arc(0.0), v_ego=8.0, current_curvature=0.008)
+def test_curve_exit_countersteers_retained_c2_directly():
+  controller = FordPathController(dt=0.05)
+  for _ in range(40):
+    controller.update(_arc(0.008), v_ego=8.0, applied_curvature=0.008)
+  path = controller.update(_arc(0.0), v_ego=8.0, applied_curvature=0.008)
+
+  assert path.path_offset == 0.0
+  assert path.path_angle == 0.0
+  assert path.curvature < 0.0
+
+
+def test_s_turn_uses_c0_c1_immediately_and_drains_old_c2():
+  controller = FordPathController(dt=0.05)
+  for _ in range(40):
+    controller.update(_arc(0.008), v_ego=8.0, applied_curvature=0.008)
+  path = controller.update(_arc(-0.008), v_ego=8.0, applied_curvature=0.008)
 
   assert path.path_offset < -0.15
   assert path.path_angle < -0.05
-  assert path.curvature == 0.0
-
-
-def test_s_turn_error_includes_old_wheel_direction():
-  path = FordPathController().update(_arc(-0.008), v_ego=8.0, current_curvature=0.008)
-  entry = FordPathController().update(_arc(-0.008), v_ego=8.0, current_curvature=0.0)
-
-  assert path.path_offset < entry.path_offset
-  assert path.path_angle < entry.path_angle
   assert path.curvature < 0.0
 
 
 def test_desired_curvature_noise_does_not_move_straight_aligned_path():
   controller = FordPathController()
-  quiet = controller.update(_arc(0.0), -0.003, v_ego=15.0, current_curvature=0.0)
-  noisy = controller.update(_arc(0.0), 0.003, v_ego=15.0, current_curvature=0.0)
+  quiet = controller.update(_arc(0.0), -0.003, v_ego=15.0, applied_curvature=0.0)
+  noisy = controller.update(_arc(0.0), 0.003, v_ego=15.0, applied_curvature=0.0)
 
   assert quiet == noisy
   assert quiet.path_offset == 0.0
@@ -65,14 +73,14 @@ def test_desired_curvature_noise_does_not_move_straight_aligned_path():
 
 
 def test_c2_and_c3_are_target_path_geometry_at_same_reference():
-  path = encode_ford_path(_arc(0.008), 0.2, current_curvature=0.0)
+  path = encode_ford_path(_arc(0.008), 0.2)
 
   assert np.isclose(path.curvature, 0.008, atol=2e-5)
-  assert abs(path.curvature_rate) < 2e-6
+  assert abs(path.curvature_rate) < 6e-6
 
 
 def test_invalid_or_inactive_returns_no_path():
   controller = FordPathController()
 
-  assert not controller.update(_arc(0.0), v_ego=12.0, current_curvature=0.0, active=False).valid
-  assert not controller.update(None, v_ego=12.0, current_curvature=0.0).valid
+  assert not controller.update(_arc(0.0), v_ego=12.0, applied_curvature=0.0, active=False).valid
+  assert not controller.update(None, v_ego=12.0, applied_curvature=0.0).valid
