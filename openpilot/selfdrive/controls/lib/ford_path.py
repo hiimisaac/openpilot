@@ -9,15 +9,14 @@ DBC_ANGLE = (-0.5, 0.5235)
 DBC_CURVATURE = (-0.02, 0.02)
 DBC_CURVATURE_RATE = (-0.001024, 0.001023)
 
-_PREVIEW_M = 7.0
-_PATH_FIT_M = 20.0
+_MIN_PREDICTION_S = 0.05
+_MAX_PREDICTION_S = 1.0
 
 # Hands-off channel identification from 863k archived 20 Hz samples. C2 is
-# the only slow path field; use its time constant to estimate retained state.
+# the only slow path field; its time constant provides continuous lead
+# compensation for the geometric curvature derivative carried by C3.
 _C2_SPEEDS = (1.5, 4.5, 8.0, 12.5, 18.5, 28.5)
 _C2_TAUS = (0.750, 0.800, 0.791, 0.779, 0.598, 1.330)
-_C2_UNWIND_DEADBAND = 0.001
-_C2_UNWIND_MIN = 0.002
 
 
 @dataclass(frozen=True)
@@ -37,90 +36,116 @@ def _finite(value: float) -> float:
   return float(value) if math.isfinite(value) else 0.0
 
 
-def _fit_path(model) -> FordPath | None:
+def _predicted_pose(curvature: float, distance: float) -> tuple[float, float, float]:
+  """Propagate the measured vehicle pose over the short actuator delay."""
+  curvature = _finite(curvature)
+  distance = max(_finite(distance), 0.0)
+  heading = curvature * distance
+  if abs(curvature) < 1e-9:
+    return distance, 0.0, 0.0
+  return math.sin(heading) / curvature, (1.0 - math.cos(heading)) / curvature, heading
+
+
+def _model_arrays(model) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
   try:
     x = np.asarray(model.position.x, dtype=float)
     y = np.asarray(model.position.y, dtype=float)
     heading = np.unwrap(np.asarray(model.orientation.z, dtype=float))
+    t = np.asarray(model.position.t, dtype=float)
   except (AttributeError, TypeError, ValueError):
     return None
-  if len(x) < 2 or len(y) != len(x) or len(heading) != len(x) or not np.isfinite(np.concatenate((x, y, heading))).all():
+  if len(x) < 3 or len(y) != len(x) or len(heading) != len(x) or len(t) != len(x):
+    return None
+  if not np.isfinite(np.concatenate((t, x, y, heading))).all():
     return None
 
-  x, unique = np.unique(x, return_index=True)
+  t, unique = np.unique(t, return_index=True)
+  x = x[unique]
   y = y[unique]
   heading = heading[unique]
-  if len(x) < 2:
+  if len(t) < 3 or t[-1] <= t[0]:
+    return None
+  return t, x, y, heading
+
+
+def _local_geometry(t: np.ndarray, x: np.ndarray, y: np.ndarray, heading: np.ndarray,
+                    target_time: float) -> tuple[float, float] | None:
+  """Evaluate C2/C3 at the same predicted-time origin used by C0/C1."""
+  path_distance = np.cumsum(np.hypot(np.diff(x, prepend=x[0]), np.diff(y, prepend=y[0])))
+  target_distance = float(np.interp(target_time, t, path_distance))
+  distance, unique = np.unique(path_distance, return_index=True)
+  local_heading = heading[unique]
+  if len(distance) < 3 or distance[-1] - distance[0] < 1e-3:
     return None
 
-  # Rebase all four Ford fields at one point on the model path.
-  preview = float(np.clip(x[0] + _PREVIEW_M, x[0], x[-1]))
-  offset = float(np.interp(preview, x, y))
-  path_angle = float(np.interp(preview, x, heading))
+  curvature = np.gradient(local_heading, distance, edge_order=2)
+  curvature_rate = np.gradient(curvature, distance, edge_order=2)
+  return float(np.interp(target_distance, distance, curvature)), float(np.interp(target_distance, distance, curvature_rate))
 
-  # Fit the derivative form of Ford's cubic over the local model path. This
-  # rejects point noise while yielding C2/C3 at the same reference as C0/C1.
-  distance = np.cumsum(np.hypot(np.diff(x, prepend=x[0]), np.diff(y, prepend=y[0])))
-  moving = np.concatenate(([True], np.diff(distance) > 1e-3))
-  local = moving & (distance <= _PATH_FIT_M)
-  if np.count_nonzero(local) < 3:
+
+def _fit_path(model, speed: float, current_curvature: float, actuator_delay: float) -> FordPath | None:
+  arrays = _model_arrays(model)
+  if arrays is None:
     return None
-  coefficients = np.polynomial.polynomial.polyfit(distance[local], heading[local], 2)
-  preview_distance = float(np.interp(preview, x, distance))
-  curvature = float(coefficients[1] + 2.0 * coefficients[2] * preview_distance)
-  curvature_rate = float(2.0 * coefficients[2])
+  t, x, y, heading = arrays
+
+  prediction_time = float(np.clip(_finite(actuator_delay), _MIN_PREDICTION_S, _MAX_PREDICTION_S))
+  target_time = float(np.clip(t[0] + prediction_time, t[0], t[-1]))
+  target_x = float(np.interp(target_time, t, x))
+  target_y = float(np.interp(target_time, t, y))
+  target_heading = float(np.interp(target_time, t, heading))
+
+  predicted_x, predicted_y, predicted_heading = _predicted_pose(current_curvature, speed * prediction_time)
+  dx = target_x - predicted_x
+  dy = target_y - predicted_y
+  path_offset = -math.sin(predicted_heading) * dx + math.cos(predicted_heading) * dy
+  path_angle = target_heading - predicted_heading
+
+  # Evaluate the local derivatives at the predicted-time origin. A forward
+  # window fit can pull a future curve into the present and make the four fields
+  # disagree; point-local derivatives keep one coherent short polynomial.
+  geometry = _local_geometry(t, x, y, heading, target_time)
+  if geometry is None:
+    return None
+  geometric_curvature, geometric_curvature_rate = geometry
+  curvature_rate = _clip(geometric_curvature_rate, DBC_CURVATURE_RATE)
+
+  # Invert the identified first-order C2 lag continuously. For a spatial path,
+  # d(curvature)/dt = speed * C3. This supplies lead on entry and an equal-sign
+  # drain on exit without entry/unwind states or thresholds.
+  tau = float(np.interp(speed, _C2_SPEEDS, _C2_TAUS))
+  curvature_command = geometric_curvature + tau * speed * curvature_rate
+
   return FordPath(
     valid=True,
-    path_offset=_clip(offset, DBC_OFFSET),
+    path_offset=_clip(path_offset, DBC_OFFSET),
     path_angle=_clip(path_angle, DBC_ANGLE),
-    curvature=_clip(curvature, DBC_CURVATURE),
-    curvature_rate=_clip(curvature_rate, DBC_CURVATURE_RATE),
+    curvature=_clip(curvature_command, DBC_CURVATURE),
+    curvature_rate=curvature_rate,
   )
 
 
 class FordPathController:
-  """Send one Ford path polynomial and actively drain retained C2."""
+  """Send continuously refreshed, delay-aligned Ford path polynomials."""
 
   def __init__(self, dt: float = 0.01):
-    self.dt = dt
-    self.c2_response = 0.0
+    del dt
 
   def reset(self) -> None:
-    self.c2_response = 0.0
+    pass
 
   def update(self, model, desired_curvature: float = 0.0, *, v_ego: float = 0.0, active: bool = True,
-             applied_curvature: float | None = None) -> FordPath:
+             current_curvature: float = 0.0, actuator_delay: float = 0.0) -> FordPath:
     del desired_curvature
-    path = _fit_path(model) if model is not None else None
+    path = _fit_path(model, max(_finite(v_ego), 0.0), current_curvature, actuator_delay) if model is not None else None
     if not active or path is None:
-      self.reset()
       return FordPath()
-
-    speed = max(_finite(v_ego), 0.0)
-    tau = float(np.interp(speed, _C2_SPEEDS, _C2_TAUS))
-    applied_c2 = path.curvature if applied_curvature is None else _finite(applied_curvature)
-    alpha = 1.0 - math.exp(-self.dt / max(tau, self.dt))
-    self.c2_response += alpha * (applied_c2 - self.c2_response)
-
-    # C0/C1 remain the model polynomial and therefore never close another loop
-    # around the PSCM. When the polynomial unwinds or reverses, use C2 itself to
-    # cancel the estimated slow state instead of contaminating the fast fields.
-    curvature = path.curvature
-    c2_error = path.curvature - self.c2_response
-    unwinding = path.curvature * self.c2_response <= 0.0 or abs(path.curvature) < abs(self.c2_response)
-    if unwinding and abs(self.c2_response) > _C2_UNWIND_MIN and abs(c2_error) > _C2_UNWIND_DEADBAND:
-      curvature += c2_error
-
-    return FordPath(
-      valid=True,
-      path_offset=path.path_offset,
-      path_angle=path.path_angle,
-      curvature=_clip(curvature, DBC_CURVATURE),
-      curvature_rate=path.curvature_rate,
-    )
+    return path
 
 
-def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0, *, v_ego: float = 0.0) -> FordPath:
+def encode_ford_path(model, t_prev: float, desired_curvature: float = 0.0, *, v_ego: float = 0.0,
+                     current_curvature: float = 0.0, actuator_delay: float = 0.0) -> FordPath:
   """Stateless compatibility helper; live control uses FordPathController."""
   del t_prev
-  return FordPathController().update(model, desired_curvature, v_ego=v_ego)
+  return FordPathController().update(model, desired_curvature, v_ego=v_ego, current_curvature=current_curvature,
+                                     actuator_delay=actuator_delay)
