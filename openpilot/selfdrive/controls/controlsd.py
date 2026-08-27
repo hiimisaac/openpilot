@@ -148,7 +148,8 @@ class Controls:
     if self.CP.brand == "ford":
       path = self.ford_path_controller.update(model_v2 if self.sm.valid['modelV2'] else None,
                                               self.desired_curvature, v_ego=CS.vEgo, active=CC.latActive,
-                                              current_curvature=self.curvature, actuator_delay=lat_delay)
+                                              current_curvature=self.curvature, yaw_rate=CS.yawRate,
+                                              actuator_delay=lat_delay)
       actuators.lateralPath.valid = path.valid
       actuators.lateralPath.pathOffset = float(path.path_offset)
       actuators.lateralPath.pathAngle = float(path.path_angle)
