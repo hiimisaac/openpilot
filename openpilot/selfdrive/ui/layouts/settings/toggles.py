@@ -8,6 +8,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.selfdrive.car.mads import is_mads_available
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 
@@ -18,6 +19,12 @@ DESCRIPTIONS = {
     "Your attention is required at all times to use this feature."
   ),
   "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage openpilot."),
+  "MadsEnabled": tr_noop(
+    "Use the cruise main button to control steering independently from ACC. When the main switch is on, steering remains active while ACC is off."
+  ),
+  "LaneTurnDesire": tr_noop(
+    "With one turn signal on below 19 mph, hint to the driving model to plan a turn in that direction. Blind-spot detection can suppress the hint."
+  ),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, openpilot will follow lead cars closer and be more aggressive with the gas and brake. " +
     "In relaxed mode openpilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
@@ -58,6 +65,18 @@ class TogglesLayout(Widget):
         lambda: tr("Disengage on Accelerator Pedal"),
         DESCRIPTIONS["DisengageOnAccelerator"],
         "disengage_on_accelerator.png",
+        False,
+      ),
+      "MadsEnabled": (
+        lambda: tr("Modular Assistive Driving System (MADS)"),
+        DESCRIPTIONS["MadsEnabled"],
+        "chffr_wheel.png",
+        True,
+      ),
+      "LaneTurnDesire": (
+        lambda: tr("Turn Desires"),
+        DESCRIPTIONS["LaneTurnDesire"],
+        "road.png",
         False,
       ),
       "IsLdwEnabled": (
@@ -204,6 +223,13 @@ class TogglesLayout(Widget):
     for toggle_def in self._toggle_defs:
       if self._toggle_defs[toggle_def][3] and toggle_def not in self._locked_toggles:
         self._toggles[toggle_def].action_item.set_enabled(not ui_state.engaged)
+
+    if ui_state.CP is not None:
+      mads_supported = is_mads_available(ui_state.CP)
+      mads_locked = "MadsEnabled" in self._locked_toggles
+      self._toggles["MadsEnabled"].action_item.set_enabled(mads_supported and not mads_locked and not ui_state.engaged)
+      mads_description = DESCRIPTIONS["MadsEnabled"] if mads_supported else tr("MADS is currently available only on Ford platforms.")
+      self._toggles["MadsEnabled"].set_description(mads_description)
 
   def _render(self, rect):
     self._scroller.render(rect)
